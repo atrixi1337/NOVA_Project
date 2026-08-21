@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nova POC — Amazon Nova Chat</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #131722;
+    --panel-2: #1b2230;
+    --border: #2a3344;
+    --text: #e6edf3;
+    --muted: #8b97a7;
+    --accent: #ff9900;      /* Amazon orange */
+    --accent-2: #4f9dff;
+    --user: #1f2a3a;
+    --tool: #1a2a22;
+    --tool-border: #2f6b4a;
+    --err: #ff5d5d;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 12px 18px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  .logo { font-weight: 700; font-size: 18px; }
+  .logo .nova { color: var(--accent); }
+  .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 6px; }
+  .status-dot.live { background: #3fd07a; box-shadow: 0 0 8px #3fd07a; }
+  .spacer { flex: 1; }
+  label.ctl { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  select, input[type="text"], input[type="password"] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 10px; font-size: 13px; outline: none;
+  }
+  select:focus, input:focus { border-color: var(--accent-2); }
+  .switch { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
+  .switch input { display: none; }
+  .slider { width: 38px; height: 21px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 20px; position: relative; transition: .2s; }
+  .slider::before { content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; background: var(--muted); border-radius: 50%; transition: .2s; }
+  .switch input:checked + .slider { background: var(--accent); border-color: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(17px); background: #0b0e14; }
+
+  #chat { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 16px; }
+  .msg { max-width: 820px; width: 100%; margin: 0 auto; display: flex; gap: 12px; }
+  .msg .avatar { width: 30px; height: 30px; border-radius: 8px; flex: 0 0 30px; display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+  .msg.user .avatar { background: var(--accent-2); color: #06121f; }
+  .msg.assistant .avatar { background: var(--accent); color: #1a1000; }
+  .bubble { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 15px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user .bubble { background: var(--user); }
+  .bubble code, .bubble pre { background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .bubble pre { padding: 10px; overflow-x: auto; }
+  .role-tag { font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+
+  .tool-trace { max-width: 820px; width: 100%; margin: 0 auto; border: 1px solid var(--tool-border); background: var(--tool); border-radius: 12px; overflow: hidden; }
+  .tool-trace summary { cursor: pointer; padding: 9px 14px; font-size: 13px; color: #7fe0a8; font-weight: 600; }
+  .tool-trace .body { padding: 0 14px 12px; }
+  .tool-step { border-top: 1px dashed var(--tool-border); padding: 8px 0; font-size: 13px; }
+  .tool-step:first-child { border-top: none; }
+  .tool-name { color: #7fe0a8; font-weight: 600; }
+  .tool-args, .tool-res { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; }
+
+  .usage { max-width: 820px; width: 100%; margin: 0 auto; text-align: center; color: var(--muted); font-size: 11px; }
+
+  footer { border-top: 1px solid var(--border); background: var(--panel); padding: 12px 18px; display: flex; gap: 10px; align-items: flex-end; }
+  #input { flex: 1; resize: none; min-height: 44px; max-height: 160px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; font-size: 14px; outline: none; font-family: inherit; }
+  #input:focus { border-color: var(--accent-2); }
+  button.send { background: var(--accent); color: #1a1000; border: none; border-radius: 10px; padding: 11px 18px; font-weight: 700; cursor: pointer; font-size: 14px; }
+  button.send:disabled { opacity: .5; cursor: not-allowed; }
+  .hint { color: var(--muted); font-size: 12px; max-width: 820px; margin: 0 auto; padding: 0 22px 10px; }
+
+  .pill { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 20px; padding: 2px 9px; }
+
+  #toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: #2a1320; border: 1px solid var(--err); color: var(--err); padding: 10px 16px; border-radius: 10px; display: none; max-width: 80%; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><span class="nova">Nova</span> POC <span class="pill">Amazon Nova PoC</span></div>
+  <span class="status-dot" id="statusDot"></span>
+  <span id="statusText" style="color:var(--muted);font-size:13px">checking…</span>
+  <div class="spacer"></div>
+
+  <label class="ctl">Model
+    <select id="modelSelect"></select>
+  </label>
+
+  <label class="switch" title="Let Nova call local tools (time, calculator, file read)">
+    <input type="checkbox" id="agentToggle" />
+    <span class="slider"></span>
+    <span style="color:var(--muted);font-size:13px">Agent mode</span>
+  </label>
+
+  <label class="ctl">Key (optional)
+    <input type="password" id="keyInput" placeholder="override server key" size="16" />
+  </label>
+</header>
+
+<div id="chat"></div>
+<div class="hint" id="hint">Normal chat by default. Flip <b>Agent mode</b> to let Nova use tools — try “What time is it?”, “Calculate (42 * 17) / 3”, or “Read the file env.example”.</div>
+
+<footer>
+  <textarea id="input" placeholder="Send a message to Nova…  (Enter to send, Shift+Enter for newline)"></textarea>
+  <button class="send" id="sendBtn">Send</button>
+</footer>
+
+<div id="toast"></div>
+
+<script>
+const chatEl = document.getElementById("chat");
+const inputEl = document.getElementById("input");
+const sendBtn = document.getElementById("sendBtn");
+const modelSelect = document.getElementById("modelSelect");
+const agentToggle = document.getElementById("agentToggle");
+const keyInput = document.getElementById("keyInput");
+const statusDot = document.getElementById("statusDot");
+const statusText = document.getElementById("statusText");
+
+let conversation = [];   // [{role, content}]
+let busy = false;
+
+// ---- bootstrap: models + health ----
+async function init() {
+  try {
+    const m = await fetch("/api/models").then(r => r.json());
+    modelSelect.innerHTML = m.models.map(x => `<option value="${x}" ${x===m.default?"selected":""}>${x}</option>`).join("");
+  } catch (e) { /* ignore */ }
+  checkHealth();
+}
+async function checkHealth() {
+  try {
+    const h = await fetch("/api/health").then(r => r.json());
+    statusDot.classList.add("live");
+    statusText.textContent = h.nova_configured ? "Nova key set (server)" : "no server key — paste one above";
+  } catch (e) {
+    statusDot.classList.remove("live");
+    statusText.textContent = "backend unreachable";
+  }
+}
+
+// ---- helpers ----
+function esc(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmt(text){
+  // very light markdown: fenced code blocks, then inline code
+  text = esc(text);
+  text = text.replace(/```([\s\S]*?)```/g, (_,c)=>`<pre>${c.trim()}</pre>`);
+  text = text.replace(/`([^`]+)`/g, (_,c)=>`<code>${c}</code>`);
+  return text;
+}
+function addMessage(role, text) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  const avatar = role === "user" ? "U" : "N";
+  wrap.innerHTML = `<div class="avatar">${avatar}</div><div class="bubble"><div class="role-tag">${role}</div>${fmt(text)}</div>`;
+  chatEl.appendChild(wrap);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return wrap.querySelector(".bubble");
+}
+function addToolTrace(trace) {
+  const steps = trace.filter(t => t.type === "tool");
+  if (!steps.length) return;
+  const details = document.createElement("details");
+  details.className = "tool-trace";
+  details.open = true;
+  let body = `<summary>🔧 Agent performed ${steps.length} tool call(s)</summary><div class="body">`;
+  for (const t of steps) {
+    body += `<div class="tool-step"><span class="tool-name">${esc(t.name)}</span>()`;
+    body += `<div class="tool-args">args: ${esc(JSON.stringify(t.arguments))}</div>`;
+    body += `<div class="tool-res">→ ${esc(String(t.result))}</div></div>`;
+  }
+  body += `</div>`;
+  details.innerHTML = body;
+  chatEl.appendChild(details);
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+function addUsage(u) {
+  if (!u) return;
+  const el = document.createElement("div");
+  el.className = "usage";
+  el.textContent = `tokens — prompt ${u.prompt_tokens} · completion ${u.completion_tokens} · total ${u.total_tokens}`;
+  chatEl.appendChild(el);
+}
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(t._t); t._t = setTimeout(()=>t.style.display="none", 6000);
+}
+
+// ---- send ----
+async function send() {
+  const text = inputEl.value.trim();
+  if (!text || busy) return;
+  inputEl.value = "";
+  addMessage("user", text);
+  conversation.push({ role: "user", content: text });
+
+  busy = true; sendBtn.disabled = true;
+  const placeholder = addMessage("assistant", "…");
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: conversation,
+        model: modelSelect.value,
+        agent: agentToggle.checked,
+        api_key: keyInput.value.trim() || undefined,
+      }),
+    });
+    const data = await res.json().catch(()=>({detail:"Non-JSON response from server"}));
+    if (!res.ok) {
+      placeholder.innerHTML = `<div class="role-tag">error</div>${fmt(data.detail || res.statusText)}`;
+      toast((data.detail||res.statusText)+"");
+      return;
+    }
+    placeholder.innerHTML = `<div class="role-tag">assistant</div>${fmt(data.content)}`;
+    if (data.agent) addToolTrace(data.trace);
+    addUsage(data.usage);
+    conversation.push({ role: "assistant", content: data.content });
+  } catch (e) {
+    placeholder.innerHTML = `<div class="role-tag">error</div>${esc(String(e))}`;
+    toast("Network error: " + e);
+  } finally {
+    busy = false; sendBtn.disabled = false;
+    inputEl.focus();
+  }
+}
+
+sendBtn.addEventListener("click", send);
+inputEl.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
+});
+
+init();
+</script>
+</body>
+</html>

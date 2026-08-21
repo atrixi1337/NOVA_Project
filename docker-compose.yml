@@ -1,0 +1,10 @@
+services:
+  nova-poc:
+    build: .
+    image: nova-poc:latest
+    container_name: nova-poc
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    restart: unless-stopped

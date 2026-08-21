@@ -1,0 +1,20 @@
+[Unit]
+Description=Nova POC — local Amazon Nova chat app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/dev/PROJECT/NOVA_Project
+EnvironmentFile=/home/dev/PROJECT/NOVA_Project/.env
+ExecStartPre=/home/dev/PROJECT/NOVA_Project/nova_env/bin/python -c "import importlib.util; import sys; sys.exit(0 if importlib.util.find_spec('uvicorn') else 1)"
+ExecStart=/home/dev/PROJECT/NOVA_Project/nova_env/bin/uvicorn backend:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+User=dev
+Group=dev
+
+[Install]
+WantedBy=multi-user.target

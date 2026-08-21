@@ -1,0 +1,9 @@
+# Secrets — never commit the real key
+.env
+# Python caches
+__pycache__/
+*.pyc
+# Virtualenv (kept on disk, not in git)
+nova_env/
+.venv/
+venv/
