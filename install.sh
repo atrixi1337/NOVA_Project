@@ -7,7 +7,7 @@
 # and makes both persistent via systemd.
 #
 # USAGE (fresh computer):
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/atrixi1337/NOVA_Project/main/install.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/atrixi1337/NOVA_Project/master/install.sh)"
 #
 # That runs as your normal user; the script sudo's only the few systemd steps.
 # The ONLY thing you type is your Amazon Nova API key (and, if prompted, your
