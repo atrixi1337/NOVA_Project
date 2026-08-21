@@ -11,6 +11,42 @@ endpoint (`https://api.nova.amazon.com/v1/chat/completions`). It demonstrates:
 
 The Nova API key is kept **server-side only** (never shipped to the browser).
 
+## Deploy with one command (public Cloudflare link)
+
+Anyone can deploy this on a fresh Linux box and get a public, HTTPS-accessible
+URL via a Cloudflare quick tunnel — **the only input is your Amazon Nova API
+key**. Everything else (clone, venv, deps, systemd services, tunnel) is
+automated and reboot-persistent:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/atrixi1337/NOVA_Project/master/install.sh)"
+```
+
+What it does:
+
+1. Clones this repo into `~/NOVA_Project`.
+2. Builds a Python venv and installs deps.
+3. Prompts **once** for your `NOVA_API_KEY` and writes it to `~/NOVA_Project/.env`
+   (the only secret, never committed).
+4. Installs `cloudflared` and launches two systemd services:
+   * `nova-poc.service` — the app on `:8000`.
+   * `nova-tunnel.service` — a Cloudflare quick tunnel exposing the app.
+5. Prints your public URL (also saved to `~/NOVA_Project/tunnel_url.txt`).
+
+After install the app is reachable from your phone/anywhere at that URL, and it
+survives reboots. Run `sudo systemctl status nova-poc nova-tunnel` to check.
+
+> **Note on the public link:** a quick tunnel gives a *random* `*.trycloudflare.com`
+> URL that changes if the tunnel restarts. Anyone with the link can use your Nova
+> key (it's a PoC — fine for personal/mobile use, not for sharing publicly). The
+> current URL is always in `~/NOVA_Project/tunnel_url.txt`. For a **fixed** URL,
+> use a named Cloudflare tunnel (needs a free Cloudflare account + API token).
+
+Optional env vars before the command: `NOVA_INSTALL_DIR` (install path,
+default `~/NOVA_Project`), `NOVA_PORT` (app port, default `8000`).
+Add `--no-service` to skip systemd (e.g. for containers/tests) and run the app
+in the foreground instead.
+
 ## Quick start (Python venv)
 
 ```bash
