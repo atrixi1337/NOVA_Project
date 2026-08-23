@@ -512,8 +512,10 @@ async def call_cohere(
                 )
             else:
                 text = str(content_blocks or "")
-            # Normalise into OpenAI-ish shape.
-            usage_raw = (parsed.get("meta") or {}).get("billed_units") or (parsed.get("meta") or {}).get("tokens") or {}
+            # Cohere v2 returns usage at the TOP LEVEL (not under meta).
+            # Prefer the billed_units view; fall back to tokens.
+            usage_raw = parsed.get("usage") or {}
+            bill = usage_raw.get("billed_units") or usage_raw.get("tokens") or {}
             normalised = {
                 "id": parsed.get("id"),
                 "model": parsed.get("model") or model,
@@ -525,9 +527,9 @@ async def call_cohere(
                     }
                 }],
                 "usage": {
-                    "prompt_tokens": usage_raw.get("input_tokens", 0),
-                    "completion_tokens": usage_raw.get("output_tokens", 0),
-                    "total_tokens": usage_raw.get("input_tokens", 0) + usage_raw.get("output_tokens", 0),
+                    "prompt_tokens": bill.get("input_tokens", 0),
+                    "completion_tokens": bill.get("output_tokens", 0),
+                    "total_tokens": bill.get("input_tokens", 0) + bill.get("output_tokens", 0),
                 },
             }
             return normalised
