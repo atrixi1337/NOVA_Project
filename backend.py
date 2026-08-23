@@ -19,11 +19,12 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("nova_poc")
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+import re
 
 # ----------------------------------------------------------------------------
 # Configuration
@@ -35,6 +36,10 @@ APP_PORT = int(os.getenv("APP_PORT", "8000"))
 DEFAULT_MODEL = os.getenv("NOVA_MODEL", "nova-2-lite-v1")
 # Directory the read_file tool is allowed to read from (keeps the demo safe).
 SANDBOX_ROOT = Path(os.getenv("NOVA_SANDBOX", str(Path.home() / "Downloads"))).resolve()
+
+# ---- file analyzer config ----
+ANALYZE_MAX_CHARS = int(os.getenv("NOVA_ANALYZE_MAX_CHARS", "60000"))
+NOVA_MAX_UPLOAD_MB = int(os.getenv("NOVA_MAX_UPLOAD_MB", "10"))
 
 # Models exposed in the UI picker.
 AVAILABLE_MODELS = [
@@ -260,6 +265,11 @@ async def call_nova(
                 logger.warning("%s — retrying", last_err)
                 continue
 
+            # Any non-2xx: extract a useful message and raise (no retry needed).
+            if resp.status_code >= 400:
+                detail = _clean_error(resp)
+                raise HTTPException(status_code=resp.status_code, detail=detail)
+
             body = resp.text
             # Nova returns JSON on success; sometimes Amazon's CloudFront front
             # returns an HTML error page instead of JSON. Treat that as an error.
@@ -272,10 +282,19 @@ async def call_nova(
                 continue
 
             try:
-                return resp.json()
+                parsed = resp.json()
             except json.JSONDecodeError:
                 last_err = "Nova response was not valid JSON."
                 continue
+            # Nova must return a choices[] array; guard against empty/odd shapes.
+            if not isinstance(parsed, dict) or "choices" not in parsed:
+                last_err = (
+                    "Nova returned an unexpected response shape (no choices). "
+                    + str(parsed)[:200]
+                )
+                logger.warning("Unexpected Nova shape: %.200s", str(parsed))
+                continue
+            return parsed
 
     # Out of attempts: report the last observed problem cleanly.
     raise HTTPException(status_code=502, detail=last_err or "Nova request failed.")
@@ -408,6 +427,148 @@ async def chat(req: ChatRequest):
             "trace": [],
             "agent": False,
         })
+
+
+# ----------------------------------------------------------------------------
+# File analyzer
+# ----------------------------------------------------------------------------
+# Cheap, server-side pre-processing so Nova only has to do the *thinking*,
+# and so the UI can show objective numbers even before the LLM answers.
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_LEVEL_RE = re.compile(r"\b(ERROR|FATAL|CRITICAL|WARN|WARNING|INFO|DEBUG|NOTICE)\b", re.I)
+
+
+def quick_stats(text: str) -> Dict[str, Any]:
+    lines = text.splitlines()
+    n = len(lines)
+    levels: Dict[str, int] = {}
+    ips: Dict[str, int] = {}
+    for ln in lines:
+        m = _LEVEL_RE.search(ln)
+        if m:
+            levels[m.group(1).upper()] = levels.get(m.group(1).upper(), 0) + 1
+        for im in _IPV4_RE.findall(ln):
+            # skip obvious non-routable noise like 0.0.0.0
+            if im == "0.0.0.0":
+                continue
+            ips[im] = ips.get(im, 0) + 1
+    top_ips = sorted(ips.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    return {
+        "lines": n,
+        "bytes": len(text.encode("utf-8", "replace")),
+        "level_counts": levels,
+        "top_ips": top_ips,
+        "unique_ips": len(ips),
+    }
+
+
+def build_analyzer_prompt(text: str, mode: str, max_chars: int) -> str:
+    if len(text) > max_chars:
+        text = (
+            text[:max_chars]
+            + f"\n\n[… truncated: analysis ran on the first {max_chars} characters "
+            f"of {len(text)} total …]"
+        )
+    if mode == "security":
+        system = (
+            "You are a security log analyst in an authorized SOC lab. The user has "
+            "uploaded a log file. Analyze it ONLY for security-relevant signal. "
+            "Give a concise but thorough report with these sections:\n"
+            "1. SUMMARY — what kind of log this is and the overall risk impression.\n"
+            "2. KEY FINDINGS — bullet list of concrete security observations "
+            "(failed/auth logins, brute-force patterns, suspicious source IPs, "
+            "privilege changes, unusual times, error storms, recon/scan signatures, "
+            "malware/IOC strings, data exfil indicators).\n"
+            "3. SUSPICIOUS ENTITIES — a short table of IPs / accounts / hosts that "
+            "warrant follow-up, with the reason and a rough frequency.\n"
+            "4. RECOMMENDED ACTIONS — what a responder should do next.\n"
+            "Be specific and cite line-style evidence where you can (do not invent "
+            "line numbers). If the log shows no clear malicious activity, say so. "
+            "This is an authorized defensive lab exercise."
+        )
+    else:  # general
+        system = (
+            "You are a log triage assistant. The user has uploaded a log file. "
+            "Produce a concise, practical report with these sections:\n"
+            "1. SUMMARY — what the log is (service/source) and its general health.\n"
+            "2. ERRORS & WARNINGS — the most significant errors/warnings and any "
+            "recurring failure patterns.\n"
+            "3. TOP PATTERNS — notable repeated events, hotspots, or anomalies.\n"
+            "4. TIMELINE — a short ordered sense of when events happened / peaks.\n"
+            "5. SUGGESTIONS — what to look at or fix next.\n"
+            "Be specific and base claims on the content. Do not invent data."
+        )
+    return (
+        f"{system}\n\n"
+        "=== LOG CONTENT (begin) ===\n"
+        f"{text}\n"
+        "=== LOG CONTENT (end) ==="
+    )
+
+
+@app.post("/api/analyze")
+async def analyze(
+    file: UploadFile = File(...),
+    mode: str = Form("security"),
+    model: str = Form(""),
+    api_key: str = Form(""),
+):
+    key = api_key.strip() or NOVA_API_KEY
+    if not key:
+        raise HTTPException(
+            status_code=400,
+            detail="No Nova API key configured. Set NOVA_API_KEY in the .env file (server-side).",
+        )
+    if mode not in ("security", "general"):
+        mode = "security"
+    # Size guard (pre-read; multipart gives length via the spooled file).
+    data = await file.read()
+    if len(data) > NOVA_MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max {NOVA_MAX_UPLOAD_MB} MB.",
+        )
+    try:
+        text = data.decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Could not decode file as text/log.")
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="File appears empty.")
+
+    stats = quick_stats(text)
+    prompt = build_analyzer_prompt(text, mode, ANALYZE_MAX_CHARS)
+    use_model = model or DEFAULT_MODEL
+
+    # Nova's OpenAI-compatible endpoint requires a non-empty user message,
+    # so the analysis instruction goes in `user` and a short system role steers tone.
+    system_role = (
+        "You are a precise log-analysis assistant for an authorized defensive lab. "
+        "Follow the user's instructions exactly and structure the report as requested."
+    )
+    try:
+        data_ = await call_nova(
+            [
+                {"role": "system", "content": system_role},
+                {"role": "user", "content": prompt},
+            ],
+            use_model,
+            key,
+        )
+    except HTTPException as e:
+        # Still hand back the objective stats so the UI isn't empty.
+        return JSONResponse(
+            status_code=e.status_code,
+            content={"error": e.detail, "stats": stats, "model": use_model},
+        )
+    msg = data_["choices"][0]["message"]
+    return JSONResponse({
+        "content": msg.get("content", ""),
+        "stats": stats,
+        "mode": mode,
+        "model": data_.get("model", use_model),
+        "usage": data_.get("usage"),
+        "filename": file.filename,
+    })
 
 
 # Serve the static frontend; mount at the end so /api/* isn't shadowed.
