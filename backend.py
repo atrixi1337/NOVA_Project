@@ -46,6 +46,18 @@ DEFAULT_MODEL = os.getenv("NOVA_MODEL", "nova-2-lite-v1")
 # Directory the read_file tool is allowed to read from (keeps the demo safe).
 SANDBOX_ROOT = Path(os.getenv("NOVA_SANDBOX", str(Path.home() / "Downloads"))).resolve()
 
+# ---- second provider: Azure AI Foundry (OpenAI-compatible) ----
+FOUNDRY_BASE_URL = os.getenv(
+    "FOUNDRY_BASE_URL",
+    "https://atrixi-6635-resource.services.ai.azure.com/openai/v1",
+)
+FOUNDRY_API_KEY = os.getenv("FOUNDRY_API_KEY", "")
+FOUNDRY_DEFAULT_MODEL = os.getenv("FOUNDRY_MODEL", "gpt-5-mini")
+# Models offered for the Foundry provider in the UI picker.
+FOUNDRY_MODELS = [
+    m.strip() for m in os.getenv("FOUNDRY_MODELS", "gpt-5-mini,gpt-4o,gpt-4o-mini").split(",") if m.strip()
+]
+
 # ---- file analyzer config ----
 ANALYZE_MAX_CHARS = int(os.getenv("NOVA_ANALYZE_MAX_CHARS", "60000"))
 NOVA_MAX_UPLOAD_MB = int(os.getenv("NOVA_MAX_UPLOAD_MB", "10"))
@@ -125,6 +137,13 @@ AVAILABLE_MODELS = [
     "nova-3-lite-v1",
     "nova-3-pro-v1",
 ]
+
+# Providers the UI can switch between (both OpenAI-compatible; differ only in
+# base URL + auth header, handled in call_llm / nova_headers).
+PROVIDERS = {
+    "nova": {"label": "Amazon Nova", "base_url": NOVA_BASE_URL, "default_model": DEFAULT_MODEL, "models": AVAILABLE_MODELS},
+    "foundry": {"label": "Azure Foundry", "base_url": FOUNDRY_BASE_URL, "default_model": FOUNDRY_DEFAULT_MODEL, "models": FOUNDRY_MODELS},
+}
 
 # ----------------------------------------------------------------------------
 # Tool definitions (sent to the model so it knows what it can call)
@@ -277,8 +296,9 @@ def run_tool(name: str, arguments: Dict[str, Any]) -> str:
 # ----------------------------------------------------------------------------
 class ChatRequest(BaseModel):
     messages: List[Dict[str, Any]]
-    model: str = Field(default=DEFAULT_MODEL)
+    model: str = Field(default="")
     agent: bool = False
+    provider: str = Field(default="nova")
     api_key: Optional[str] = None  # optional override from the UI
     max_tool_rounds: int = Field(default=5, ge=1, le=10)
 
@@ -297,19 +317,28 @@ app.add_middleware(
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def nova_headers(api_key: str) -> Dict[str, str]:
-    return {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
+def nova_headers(api_key: str, provider: str = "nova") -> Dict[str, str]:
+    # Nova uses the standard OpenAI `Authorization: Bearer` scheme.
+    # Azure AI Foundry's inference endpoint uses a plain `api-key` header.
+    if provider == "foundry":
+        return {"Content-Type": "application/json", "api-key": api_key}
+    return {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
 
 
-async def call_nova(
+async def call_llm(
     messages: List[Dict[str, Any]],
     model: str,
     api_key: str,
+    provider: str = "nova",
     tools: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
+    """Send a chat completion to the chosen provider (Nova or Azure Foundry).
+
+    Both are OpenAI-compatible; they differ only in base URL and auth header.
+    """
+    prov = PROVIDERS.get(provider, PROVIDERS["nova"])
+    base_url = prov["base_url"]
+
     payload: Dict[str, Any] = {
         "model": model,
         "messages": messages,
@@ -324,67 +353,68 @@ async def call_nova(
         for attempt in range(2):  # one retry for transient gateway 5xx
             try:
                 resp = await client.post(
-                    f"{NOVA_BASE_URL}/chat/completions",
-                    headers=nova_headers(api_key),
+                    f"{base_url}/chat/completions",
+                    headers=nova_headers(api_key, provider),
                     json=payload,
                 )
             except httpx.HTTPError as e:  # network-level failure
-                last_err = f"Network error contacting Nova: {e}"
+                last_err = f"Network error contacting {provider}: {e}"
                 logger.warning(last_err)
                 continue
 
             # Surface auth / quota / bad-request errors with a clean message.
             if resp.status_code in (401, 403, 429):
-                detail = _clean_error(resp)
+                detail = _clean_error(resp, provider)
                 raise HTTPException(status_code=resp.status_code, detail=detail)
             if resp.status_code >= 500:
-                last_err = f"Nova gateway {resp.status_code} (transient)"
+                last_err = f"{provider} gateway {resp.status_code} (transient)"
                 logger.warning("%s — retrying", last_err)
                 continue
 
             # Any non-2xx: extract a useful message and raise (no retry needed).
             if resp.status_code >= 400:
-                detail = _clean_error(resp)
+                detail = _clean_error(resp, provider)
                 raise HTTPException(status_code=resp.status_code, detail=detail)
 
             body = resp.text
-            # Nova returns JSON on success; sometimes Amazon's CloudFront front
-            # returns an HTML error page instead of JSON. Treat that as an error.
+            # Nova sometimes returns an HTML error page from CloudFront instead
+            # of JSON. Treat non-JSON as an error (and as transient, so we retry).
             if not body.lstrip().startswith("{"):
                 last_err = (
-                    "Nova returned a non-JSON (HTML) error page from its gateway. "
-                    "This is intermittent on Amazon's side — try resending."
+                    f"{provider} returned a non-JSON (HTML) error page from its gateway. "
+                    "This is intermittent — try resending."
                 )
-                logger.warning("Non-JSON Nova response: %.200s", body)
+                logger.warning("Non-JSON %s response: %.200s", provider, body)
                 continue
 
             try:
                 parsed = resp.json()
             except json.JSONDecodeError:
-                last_err = "Nova response was not valid JSON."
+                last_err = f"{provider} response was not valid JSON."
                 continue
-            # Nova must return a choices[] array; guard against empty/odd shapes.
+            # Must return a choices[] array; guard against empty/odd shapes.
             if not isinstance(parsed, dict) or "choices" not in parsed:
                 last_err = (
-                    "Nova returned an unexpected response shape (no choices). "
+                    f"{provider} returned an unexpected response shape (no choices). "
                     + str(parsed)[:200]
                 )
-                logger.warning("Unexpected Nova shape: %.200s", str(parsed))
+                logger.warning("Unexpected %s shape: %.200s", provider, str(parsed))
                 continue
             return parsed
 
     # Out of attempts: report the last observed problem cleanly.
-    raise HTTPException(status_code=502, detail=last_err or "Nova request failed.")
+    raise HTTPException(status_code=502, detail=last_err or "LLM request failed.")
 
 
-def _clean_error(resp: httpx.Response) -> str:
-    """Map Nova HTTP errors to a short, human-readable message."""
+def _clean_error(resp: httpx.Response, provider: str = "nova") -> str:
+    """Map HTTP errors from a provider to a short, human-readable message."""
+    name = PROVIDERS.get(provider, {}).get("label", provider)
     map_ = {
-        401: "Nova rejected the API key (401). Check NOVA_API_KEY.",
-        403: "Nova rejected the request (403) — likely the key or the prompt was blocked.",
-        429: "Nova rate limit hit (429). Slow down and retry.",
+        401: f"{name} rejected the API key (401). Check the key in .env.",
+        403: f"{name} rejected the request (403) — likely the key or the prompt was blocked.",
+        429: f"{name} rate limit hit (429). Slow down and retry.",
     }
-    msg = map_.get(resp.status_code, f"Nova API error ({resp.status_code}).")
+    msg = map_.get(resp.status_code, f"{name} API error ({resp.status_code}).")
     snippet = resp.text.strip()
     if snippet and not snippet.lower().startswith("<!doctype") and "<html" not in snippet.lower():
         msg += f" {snippet[:200]}"
@@ -393,49 +423,76 @@ def _clean_error(resp: httpx.Response) -> str:
 
 @app.get("/api/models")
 async def get_models():
-    return {"models": AVAILABLE_MODELS, "default": DEFAULT_MODEL}
+    # Expose both providers and their model lists so the UI can switch.
+    return {
+        "providers": {
+            pid: {"label": p["label"], "models": p["models"], "default": p["default_model"]}
+            for pid, p in PROVIDERS.items()
+        },
+        "default_provider": "nova",
+    }
 
 
 @app.get("/api/health")
 async def health():
     return {
         "status": "ok",
-        "nova_configured": bool(NOVA_API_KEY),
+        "providers": {
+            pid: {
+                "label": p["label"],
+                "configured": bool(_provider_key(pid)),
+                "base_url": p["base_url"],
+            }
+            for pid, p in PROVIDERS.items()
+        },
         "sandbox_root": str(SANDBOX_ROOT),
-        "endpoint": f"{NOVA_BASE_URL}/chat/completions",
     }
+
+
+def _provider_key(provider: str) -> str:
+    """Return the server-side key for a provider (prefers UI override later)."""
+    if provider == "foundry":
+        return FOUNDRY_API_KEY
+    return NOVA_API_KEY
+
+
+def _resolve_model(provider: str, model: str) -> str:
+    prov = PROVIDERS.get(provider, PROVIDERS["nova"])
+    return model or prov["default_model"]
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    api_key = req.api_key or NOVA_API_KEY
+    provider = req.provider if req.provider in PROVIDERS else "nova"
+    api_key = (req.api_key or "").strip() or _provider_key(provider)
     if not api_key:
+        name = PROVIDERS[provider]["label"]
         raise HTTPException(
             status_code=400,
-            detail="No Nova API key configured. Set NOVA_API_KEY in the .env file (server-side).",
+            detail=f"No {name} API key configured. Set the key in the .env file (server-side).",
         )
 
     messages = list(req.messages)
-    # Prepend a lightweight system prompt so Nova reads as a local PoC demo
-    # (softens its "I can't discuss my capabilities" refusals for the lab).
+    # Prepend a lightweight system prompt so the model reads as a local PoC demo
+    # (softens "I can't discuss my capabilities" refusals for the lab).
     if not any(m.get("role") == "system" for m in messages):
         messages.insert(0, {
             "role": "system",
             "content": (
-                "You are Nova, running inside a local proof-of-concept chat app "
-                "on the user's own lab machine. Be helpful, concise, and direct. "
-                "You may discuss your capabilities, write code, and use tools when "
-                "agent mode is enabled. This is an authorized lab/demo environment."
+                "You are an AI assistant running inside a local proof-of-concept "
+                "chat app on the user's own lab machine. Be helpful, concise, and "
+                "direct. You may discuss your capabilities, write code, and use tools "
+                "when agent mode is enabled. This is an authorized lab/demo environment."
             ),
         })
     trace: List[Dict[str, Any]] = []
-    model = req.model or DEFAULT_MODEL
+    model = _resolve_model(provider, req.model)
 
     # Agent loop: let the model call tools, feed results back, repeat.
     if req.agent:
         tools = TOOLS
         for _ in range(req.max_tool_rounds):
-            data = await call_nova(messages, model, api_key, tools)
+            data = await call_llm(messages, model, api_key, provider, tools)
             choice = data["choices"][0]
             msg = choice["message"]
 
@@ -480,7 +537,7 @@ async def chat(req: ChatRequest):
                 "content": "Reached maximum tool rounds; returning last model output.",
             })
         # Final answer pass (no tools) to let the model summarise.
-        data = await call_nova(messages, model, api_key)
+        data = await call_llm(messages, model, api_key, provider)
         final_msg = data["choices"][0]["message"]
         messages.append(final_msg)
         if "usage" in data:
@@ -488,17 +545,19 @@ async def chat(req: ChatRequest):
         return JSONResponse({
             "id": data.get("id"),
             "model": data.get("model", model),
+            "provider": provider,
             "content": final_msg.get("content", ""),
             "usage": data.get("usage"),
             "trace": trace,
             "agent": True,
         })
     else:
-        data = await call_nova(messages, model, api_key)
+        data = await call_llm(messages, model, api_key, provider)
         msg = data["choices"][0]["message"]
         return JSONResponse({
             "id": data.get("id"),
             "model": data.get("model", model),
+            "provider": provider,
             "content": msg.get("content", ""),
             "usage": data.get("usage"),
             "trace": [],
@@ -588,13 +647,16 @@ async def analyze(
     file: UploadFile = File(...),
     mode: str = Form("security"),
     model: str = Form(""),
+    provider: str = Form("nova"),
     api_key: str = Form(""),
 ):
-    key = api_key.strip() or NOVA_API_KEY
+    provider = provider if provider in PROVIDERS else "nova"
+    key = (api_key or "").strip() or _provider_key(provider)
     if not key:
+        name = PROVIDERS[provider]["label"]
         raise HTTPException(
             status_code=400,
-            detail="No Nova API key configured. Set NOVA_API_KEY in the .env file (server-side).",
+            detail=f"No {name} API key configured. Set the key in the .env file (server-side).",
         )
     if mode not in ("security", "general"):
         mode = "security"
@@ -642,28 +704,29 @@ async def analyze(
     else:
         stats["file_type"] = "text"
     prompt = build_analyzer_prompt(text, mode, ANALYZE_MAX_CHARS)
-    use_model = model or DEFAULT_MODEL
+    use_model = _resolve_model(provider, model)
 
-    # Nova's OpenAI-compatible endpoint requires a non-empty user message,
-    # so the analysis instruction goes in `user` and a short system role steers tone.
+    # The analysis instruction goes in `user` and a short system role steers tone
+    # (Nova's endpoint requires a non-empty user message).
     system_role = (
         "You are a precise log-analysis assistant for an authorized defensive lab. "
         "Follow the user's instructions exactly and structure the report as requested."
     )
     try:
-        data_ = await call_nova(
+        data_ = await call_llm(
             [
                 {"role": "system", "content": system_role},
                 {"role": "user", "content": prompt},
             ],
             use_model,
             key,
+            provider,
         )
     except HTTPException as e:
         # Still hand back the objective stats so the UI isn't empty.
         return JSONResponse(
             status_code=e.status_code,
-            content={"error": e.detail, "stats": stats, "model": use_model},
+            content={"error": e.detail, "stats": stats, "model": use_model, "provider": provider},
         )
     msg = data_["choices"][0]["message"]
     return JSONResponse({
@@ -671,6 +734,7 @@ async def analyze(
         "stats": stats,
         "mode": mode,
         "model": data_.get("model", use_model),
+        "provider": provider,
         "usage": data_.get("usage"),
         "filename": file.filename,
     })

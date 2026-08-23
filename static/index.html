@@ -141,6 +141,10 @@
   <span id="statusText" style="color:var(--muted);font-size:13px">checking…</span>
   <div class="spacer"></div>
 
+  <label class="ctl">Provider
+    <select id="providerSelect"></select>
+  </label>
+
   <label class="ctl">Model
     <select id="modelSelect"></select>
   </label>
@@ -219,6 +223,7 @@ const chatEl = document.getElementById("chat");
 const inputEl = document.getElementById("input");
 const sendBtn = document.getElementById("sendBtn");
 const modelSelect = document.getElementById("modelSelect");
+const providerSelect = document.getElementById("providerSelect");
 const agentToggle = document.getElementById("agentToggle");
 const keyInput = document.getElementById("keyInput");
 const statusDot = document.getElementById("statusDot");
@@ -226,6 +231,8 @@ const statusText = document.getElementById("statusText");
 
 let conversation = [];   // [{role, content}]
 let busy = false;
+let PROVIDER_MODELS = {}; // pid -> [models]
+let PROVIDER_DEFAULTS = {}; // pid -> default model
 
 // ---- tab switching ----
 document.querySelectorAll(".tab").forEach(t => {
@@ -237,11 +244,29 @@ document.querySelectorAll(".tab").forEach(t => {
   });
 });
 
-// ---- bootstrap: models + health ----
+// When the provider changes, repopulate the model dropdown from that provider.
+providerSelect.addEventListener("change", () => {
+  const pid = providerSelect.value;
+  const models = PROVIDER_MODELS[pid] || [];
+  const def = PROVIDER_DEFAULTS[pid] || models[0] || "";
+  modelSelect.innerHTML = models.map(x => `<option value="${x}" ${x===def?"selected":""}>${x}</option>`).join("");
+});
+
+// ---- bootstrap: providers/models + health ----
 async function init() {
   try {
     const m = await fetch("/api/models").then(r => r.json());
-    modelSelect.innerHTML = m.models.map(x => `<option value="${x}" ${x===m.default?"selected":""}>${x}</option>`).join("");
+    PROVIDER_MODELS = {};
+    PROVIDER_DEFAULTS = {};
+    const provs = m.providers || {};
+    providerSelect.innerHTML = Object.entries(provs).map(([pid,p]) =>
+      `<option value="${pid}" ${pid===m.default_provider?"selected":""}>${p.label}</option>`).join("");
+    for (const [pid, p] of Object.entries(provs)) {
+      PROVIDER_MODELS[pid] = p.models || [];
+      PROVIDER_DEFAULTS[pid] = p.default || (p.models||[])[0] || "";
+    }
+    // trigger initial model population
+    providerSelect.dispatchEvent(new Event("change"));
   } catch (e) { /* ignore */ }
   checkHealth();
 }
@@ -249,7 +274,9 @@ async function checkHealth() {
   try {
     const h = await fetch("/api/health").then(r => r.json());
     statusDot.classList.add("live");
-    statusText.textContent = h.nova_configured ? "Nova key set (server)" : "no server key — paste one above";
+    const ps = h.providers || {};
+    const cfg = Object.entries(ps).filter(([,p]) => p.configured).map(([,p]) => p.label);
+    statusText.textContent = cfg.length ? `key set: ${cfg.join(", ")}` : "no server key — paste one above";
   } catch (e) {
     statusDot.classList.remove("live");
     statusText.textContent = "backend unreachable";
@@ -322,6 +349,7 @@ async function send() {
       body: JSON.stringify({
         messages: conversation,
         model: modelSelect.value,
+        provider: providerSelect.value,
         agent: agentToggle.checked,
         api_key: keyInput.value.trim() || undefined,
       }),
@@ -406,6 +434,7 @@ async function runAnalysis() {
   fd.append("file", selectedFile);
   fd.append("mode", analyzeMode);
   fd.append("model", modelSelect.value);
+  fd.append("provider", providerSelect.value);
   if (keyInput.value.trim()) fd.append("api_key", keyInput.value.trim());
 
   try {
@@ -420,7 +449,8 @@ async function runAnalysis() {
     findings.innerHTML = fmt(data.content);
     if (data.usage) {
       const u = data.usage;
-      findingsUsage.textContent = `model ${data.model} · tokens — prompt ${u.prompt_tokens} · completion ${u.completion_tokens} · total ${u.total_tokens} · file: ${esc(data.filename||"")}`;
+      const prov = data.provider ? ` · provider: ${data.provider}` : "";
+      findingsUsage.textContent = `model ${data.model}${prov} · tokens — prompt ${u.prompt_tokens} · completion ${u.completion_tokens} · total ${u.total_tokens} · file: ${esc(data.filename||"")}`;
     }
   } catch (e) {
     findings.innerHTML = `<div class="role-tag">error</div>${esc(String(e))}`;
