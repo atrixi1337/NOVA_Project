@@ -64,10 +64,10 @@ GEMINI_BASE_URL = os.getenv(
     "https://generativelanguage.googleapis.com/v1beta/openai",
 )
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-# Models offered for the Gemini provider in the UI picker.
+GEMINI_DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+# Models offered for the Gemini provider in the UI picker (current/valid IDs).
 GEMINI_MODELS = [
-    m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-2.0-flash,gemini-2.5-flash,gemini-2.5-pro").split(",") if m.strip()
+    m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-3.6-flash,gemini-3.5-flash").split(",") if m.strip()
 ]
 
 # ---- file analyzer config ----
@@ -336,14 +336,13 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 def nova_headers(api_key: str, provider: str = "nova") -> Dict[str, str]:
-    # Auth header differs per provider:
-    #  - Nova / OpenAI-style:  Authorization: Bearer <key>
+    # Auth header per provider:
     #  - Azure Foundry:        api-key: <key>
-    #  - Google Gemini (OpenAI-compat): x-goog-api-key: <key>
+    #  - Nova / Gemini (OpenAI-compatible route): Authorization: Bearer <key>
+    #    (Gemini's OpenAI-compat endpoint at /v1beta/openai uses the standard
+    #     Bearer header; x-goog-api-key is only for the native /v1beta/models API)
     if provider == "foundry":
         return {"Content-Type": "application/json", "api-key": api_key}
-    if provider == "gemini":
-        return {"Content-Type": "application/json", "x-goog-api-key": api_key}
     return {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
 
 
@@ -461,7 +460,7 @@ async def get_models():
             pid: {"label": p["label"], "models": p["models"], "default": p["default_model"]}
             for pid, p in PROVIDERS.items()
         },
-        "default_provider": "nova",
+        "default_provider": DEFAULT_PROVIDER,
     }
 
 
