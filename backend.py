@@ -46,7 +46,7 @@ DEFAULT_MODEL = os.getenv("NOVA_MODEL", "nova-2-lite-v1")
 # Directory the read_file tool is allowed to read from (keeps the demo safe).
 SANDBOX_ROOT = Path(os.getenv("NOVA_SANDBOX", str(Path.home() / "Downloads"))).resolve()
 
-# ---- second provider: Azure AI Foundry (OpenAI-compatible) ----
+# ---- provider: Azure AI Foundry (OpenAI-compatible) ----
 FOUNDRY_BASE_URL = os.getenv(
     "FOUNDRY_BASE_URL",
     "https://atrixi-6635-resource.services.ai.azure.com/openai/v1",
@@ -56,6 +56,18 @@ FOUNDRY_DEFAULT_MODEL = os.getenv("FOUNDRY_MODEL", "gpt-5-mini")
 # Models offered for the Foundry provider in the UI picker.
 FOUNDRY_MODELS = [
     m.strip() for m in os.getenv("FOUNDRY_MODELS", "gpt-5-mini,gpt-4o,gpt-4o-mini").split(",") if m.strip()
+]
+
+# ---- provider: Google Gemini via its OpenAI-compatible endpoint ----
+GEMINI_BASE_URL = os.getenv(
+    "GEMINI_BASE_URL",
+    "https://generativelanguage.googleapis.com/v1beta/openai",
+)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+# Models offered for the Gemini provider in the UI picker.
+GEMINI_MODELS = [
+    m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-2.0-flash,gemini-2.5-flash,gemini-2.5-pro").split(",") if m.strip()
 ]
 
 # ---- file analyzer config ----
@@ -130,19 +142,24 @@ def evtx_to_text(path: str) -> str:
                 lines.append("  " + " | ".join(fields))
     return "\n".join(lines)
 
-# Models exposed in the UI picker.
+# Models exposed in the UI picker (corrected IDs from the Nova model table).
 AVAILABLE_MODELS = [
+    "nova-micro-v1",
+    "nova-lite-v1",
+    "nova-pro-v1",
+    "nova-premier-v1",
     "nova-2-lite-v1",
-    "nova-2-pro-v1",
-    "nova-3-lite-v1",
-    "nova-3-pro-v1",
 ]
 
-# Providers the UI can switch between (both OpenAI-compatible; differ only in
-# base URL + auth header, handled in call_llm / nova_headers).
+# Which provider the UI defaults to on load.
+DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "foundry")
+
+# Providers the UI can switch between (all OpenAI-compatible; they differ only
+# in base URL + auth header, handled in call_llm / nova_headers).
 PROVIDERS = {
-    "nova": {"label": "Amazon Nova", "base_url": NOVA_BASE_URL, "default_model": DEFAULT_MODEL, "models": AVAILABLE_MODELS},
     "foundry": {"label": "Azure Foundry", "base_url": FOUNDRY_BASE_URL, "default_model": FOUNDRY_DEFAULT_MODEL, "models": FOUNDRY_MODELS},
+    "gemini": {"label": "Google Gemini", "base_url": GEMINI_BASE_URL, "default_model": GEMINI_DEFAULT_MODEL, "models": GEMINI_MODELS},
+    "nova": {"label": "Amazon Nova", "base_url": NOVA_BASE_URL, "default_model": DEFAULT_MODEL, "models": AVAILABLE_MODELS},
 }
 
 # ----------------------------------------------------------------------------
@@ -298,7 +315,8 @@ class ChatRequest(BaseModel):
     messages: List[Dict[str, Any]]
     model: str = Field(default="")
     agent: bool = False
-    provider: str = Field(default="nova")
+    provider: str = Field(default="")  # empty -> DEFAULT_PROVIDER
+    reasoning_effort: Optional[str] = None  # low/medium/high (reasoning models)
     api_key: Optional[str] = None  # optional override from the UI
     max_tool_rounds: int = Field(default=5, ge=1, le=10)
 
@@ -306,7 +324,7 @@ class ChatRequest(BaseModel):
 # ----------------------------------------------------------------------------
 # App
 # ----------------------------------------------------------------------------
-app = FastAPI(title="Nova POC", version="1.0.0")
+app = FastAPI(title="AI POC", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -318,10 +336,14 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 def nova_headers(api_key: str, provider: str = "nova") -> Dict[str, str]:
-    # Nova uses the standard OpenAI `Authorization: Bearer` scheme.
-    # Azure AI Foundry's inference endpoint uses a plain `api-key` header.
+    # Auth header differs per provider:
+    #  - Nova / OpenAI-style:  Authorization: Bearer <key>
+    #  - Azure Foundry:        api-key: <key>
+    #  - Google Gemini (OpenAI-compat): x-goog-api-key: <key>
     if provider == "foundry":
         return {"Content-Type": "application/json", "api-key": api_key}
+    if provider == "gemini":
+        return {"Content-Type": "application/json", "x-goog-api-key": api_key}
     return {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
 
 
@@ -331,10 +353,13 @@ async def call_llm(
     api_key: str,
     provider: str = "nova",
     tools: Optional[List[Dict[str, Any]]] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Send a chat completion to the chosen provider (Nova or Azure Foundry).
+    """Send a chat completion to the chosen provider (Nova, Foundry, or Gemini).
 
-    Both are OpenAI-compatible; they differ only in base URL and auth header.
+    All three are OpenAI-compatible; they differ only in base URL + auth header.
+    `reasoning_effort` (low/medium/high) is passed through for models that
+    support extended reasoning (e.g. gpt-5 on Foundry).
     """
     prov = PROVIDERS.get(provider, PROVIDERS["nova"])
     base_url = prov["base_url"]
@@ -347,9 +372,16 @@ async def call_llm(
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
+    # Reasoning effort only makes sense for reasoning-capable models; send it
+    # for Foundry gpt-5 family (others ignore/accept the field harmlessly).
+    if reasoning_effort and provider == "foundry" and "gpt-5" in model:
+        payload["reasoning_effort"] = reasoning_effort
 
     last_err: Optional[str] = None
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    # Reasoning models (e.g. gpt-5 with effort) can take much longer; give them
+    # a generous timeout so a deep analysis doesn't get cut off mid-think.
+    timeout = 180.0 if reasoning_effort else 60.0
+    async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(2):  # one retry for transient gateway 5xx
             try:
                 resp = await client.post(
@@ -450,9 +482,11 @@ async def health():
 
 
 def _provider_key(provider: str) -> str:
-    """Return the server-side key for a provider (prefers UI override later)."""
+    """Return the server-side key for a provider (UI override handled upstream)."""
     if provider == "foundry":
         return FOUNDRY_API_KEY
+    if provider == "gemini":
+        return GEMINI_API_KEY
     return NOVA_API_KEY
 
 
@@ -463,7 +497,7 @@ def _resolve_model(provider: str, model: str) -> str:
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    provider = req.provider if req.provider in PROVIDERS else "nova"
+    provider = req.provider if req.provider in PROVIDERS else DEFAULT_PROVIDER
     api_key = (req.api_key or "").strip() or _provider_key(provider)
     if not api_key:
         name = PROVIDERS[provider]["label"]
@@ -487,12 +521,20 @@ async def chat(req: ChatRequest):
         })
     trace: List[Dict[str, Any]] = []
     model = _resolve_model(provider, req.model)
+    eff = (req.reasoning_effort or "").strip().lower() or None
+
+    # Extract any reasoning summary the provider returned (e.g. gpt-5 on Foundry)
+    # so the UI can show it in a collapsible box rather than inline.
+    def grab_reasoning(data: Dict[str, Any]) -> Optional[str]:
+        msg = data.get("choices", [{}])[0].get("message", {}) if data.get("choices") else {}
+        r = msg.get("reasoning") or (data.get("reasoning") or "")
+        return r.strip() if isinstance(r, str) and r.strip() else None
 
     # Agent loop: let the model call tools, feed results back, repeat.
     if req.agent:
         tools = TOOLS
         for _ in range(req.max_tool_rounds):
-            data = await call_llm(messages, model, api_key, provider, tools)
+            data = await call_llm(messages, model, api_key, provider, tools, eff)
             choice = data["choices"][0]
             msg = choice["message"]
 
@@ -537,7 +579,7 @@ async def chat(req: ChatRequest):
                 "content": "Reached maximum tool rounds; returning last model output.",
             })
         # Final answer pass (no tools) to let the model summarise.
-        data = await call_llm(messages, model, api_key, provider)
+        data = await call_llm(messages, model, api_key, provider, None, eff)
         final_msg = data["choices"][0]["message"]
         messages.append(final_msg)
         if "usage" in data:
@@ -547,18 +589,20 @@ async def chat(req: ChatRequest):
             "model": data.get("model", model),
             "provider": provider,
             "content": final_msg.get("content", ""),
+            "reasoning": grab_reasoning(data),
             "usage": data.get("usage"),
             "trace": trace,
             "agent": True,
         })
     else:
-        data = await call_llm(messages, model, api_key, provider)
+        data = await call_llm(messages, model, api_key, provider, None, eff)
         msg = data["choices"][0]["message"]
         return JSONResponse({
             "id": data.get("id"),
             "model": data.get("model", model),
             "provider": provider,
             "content": msg.get("content", ""),
+            "reasoning": grab_reasoning(data),
             "usage": data.get("usage"),
             "trace": [],
             "agent": False,
@@ -647,10 +691,11 @@ async def analyze(
     file: UploadFile = File(...),
     mode: str = Form("security"),
     model: str = Form(""),
-    provider: str = Form("nova"),
+    provider: str = Form(""),  # empty -> DEFAULT_PROVIDER
+    reasoning_effort: str = Form(""),
     api_key: str = Form(""),
 ):
-    provider = provider if provider in PROVIDERS else "nova"
+    provider = provider if provider in PROVIDERS else DEFAULT_PROVIDER
     key = (api_key or "").strip() or _provider_key(provider)
     if not key:
         name = PROVIDERS[provider]["label"]
@@ -705,6 +750,7 @@ async def analyze(
         stats["file_type"] = "text"
     prompt = build_analyzer_prompt(text, mode, ANALYZE_MAX_CHARS)
     use_model = _resolve_model(provider, model)
+    eff = (reasoning_effort or "").strip().lower() or None
 
     # The analysis instruction goes in `user` and a short system role steers tone
     # (Nova's endpoint requires a non-empty user message).
@@ -721,6 +767,8 @@ async def analyze(
             use_model,
             key,
             provider,
+            None,
+            eff,
         )
     except HTTPException as e:
         # Still hand back the objective stats so the UI isn't empty.
@@ -729,8 +777,12 @@ async def analyze(
             content={"error": e.detail, "stats": stats, "model": use_model, "provider": provider},
         )
     msg = data_["choices"][0]["message"]
+    reasoning = ""
+    if isinstance(msg.get("reasoning"), str):
+        reasoning = msg["reasoning"].strip()
     return JSONResponse({
         "content": msg.get("content", ""),
+        "reasoning": reasoning or None,
         "stats": stats,
         "mode": mode,
         "model": data_.get("model", use_model),
