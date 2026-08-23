@@ -13,6 +13,8 @@ Nova API key server-side only (never shipped to the browser).
 import json
 import logging
 import os
+import io
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +27,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import re
+
+# EVTX (Windows Event Log) is binary; parse it with python-evtx into compact text.
+try:
+    from Evtx.Evtx import Evtx
+    _EVTX_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _EVTX_AVAILABLE = False
 
 # ----------------------------------------------------------------------------
 # Configuration
@@ -40,6 +49,74 @@ SANDBOX_ROOT = Path(os.getenv("NOVA_SANDBOX", str(Path.home() / "Downloads"))).r
 # ---- file analyzer config ----
 ANALYZE_MAX_CHARS = int(os.getenv("NOVA_ANALYZE_MAX_CHARS", "60000"))
 NOVA_MAX_UPLOAD_MB = int(os.getenv("NOVA_MAX_UPLOAD_MB", "10"))
+
+import tempfile
+
+# A small "magic" prefix for EVTX files (ElfFile / ElfChnk header).
+_EVTX_MAGIC = b"ElfFile"
+
+
+def looks_like_evtx(data: bytes) -> bool:
+    return data[:7] == _EVTX_MAGIC
+
+
+def evtx_to_text(path: str) -> str:
+    """Convert an EVTX file at `path` into compact, analysis-friendly text.
+
+    Full XML is huge (a few MB for a small log), so we extract only the
+    meaningful fields per record: timestamp, EventID, provider, computer,
+    level, and the flattened EventData key/value pairs. This lets many more
+    events fit inside Nova's context budget than dumping raw XML would.
+    """
+    if not _EVTX_AVAILABLE:
+        raise RuntimeError("python-evtx is not installed on the server.")
+    lines: List[str] = []
+    with Evtx(path) as evtx:
+        for rec in evtx.records():
+            try:
+                xml_str = rec.xml()
+            except Exception:  # noqa: BLE001 - skip malformed records
+                continue
+            try:
+                root = ET.fromstring(xml_str)
+            except ET.ParseError:
+                continue
+            # Namespaces vary; strip them so element lookup is simple.
+            def local(tag: str) -> str:
+                return tag.split("}", 1)[-1] if "}" in tag else tag
+
+            sys_el = next((c for c in root if local(c.tag) == "System"), None)
+            data_el = next((c for c in root if local(c.tag) == "EventData"), None)
+
+            event_id = time_created = provider = computer = level = ""
+            if sys_el is not None:
+                for child in sys_el:
+                    name = local(child.tag)
+                    if name == "EventID":
+                        event_id = (child.text or "").strip()
+                    elif name == "TimeCreated":
+                        time_created = (child.attrib.get("SystemTime") or "").strip()
+                    elif name == "Provider":
+                        provider = (child.attrib.get("Name")
+                                    or child.attrib.get("Guid") or "").strip()
+                    elif name == "Computer":
+                        computer = (child.text or "").strip()
+                    elif name == "Level":
+                        level = (child.text or "").strip()
+
+            fields: List[str] = []
+            if data_el is not None:
+                for child in data_el:
+                    nm = child.attrib.get("Name", local(child.tag))
+                    val = (child.text or "").strip()
+                    if val:
+                        fields.append(f"{nm}={val}")
+
+            header = f"[{time_created}] EventID={event_id} Level={level} Provider={provider} Computer={computer}"
+            lines.append(header)
+            if fields:
+                lines.append("  " + " | ".join(fields))
+    return "\n".join(lines)
 
 # Models exposed in the UI picker.
 AVAILABLE_MODELS = [
@@ -528,14 +605,42 @@ async def analyze(
             status_code=413,
             detail=f"File too large. Max {NOVA_MAX_UPLOAD_MB} MB.",
         )
-    try:
-        text = data.decode("utf-8", errors="replace")
-    except Exception:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail="Could not decode file as text/log.")
+    # Windows Event Logs are binary EVTX — convert to compact text first.
+    is_evtx = looks_like_evtx(data)
+    if is_evtx:
+        # python-evtx needs a file path; write bytes to a secure temp file.
+        tmp = tempfile.NamedTemporaryFile(suffix=".evtx", delete=False)
+        try:
+            tmp.write(data)
+            tmp.close()
+            try:
+                text = evtx_to_text(tmp.name)
+            except RuntimeError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"Could not parse EVTX file: {e}")
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="EVTX file produced no readable records.")
+    else:
+        try:
+            text = data.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="Could not decode file as text/log.")
     if not text.strip():
         raise HTTPException(status_code=400, detail="File appears empty.")
 
     stats = quick_stats(text)
+    if is_evtx:
+        # Each record we extracted starts with "[timestamp] EventID=" on its own line.
+        stats["evtx_records"] = sum(1 for ln in text.splitlines() if ln.startswith("["))
+        stats["file_type"] = "evtx"
+    else:
+        stats["file_type"] = "text"
     prompt = build_analyzer_prompt(text, mode, ANALYZE_MAX_CHARS)
     use_model = model or DEFAULT_MODEL
 

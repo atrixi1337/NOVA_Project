@@ -174,7 +174,7 @@
       <h3>Upload a log file</h3>
       <div class="dropzone" id="dropzone">
         <p><strong>Click to choose</strong> or drag &amp; drop a log/text file here</p>
-        <p style="font-size:12px">Max 10 MB · .log .txt .csv .json · analyzed on the server (your key is never sent to the browser)</p>
+        <p style="font-size:12px">Max 10 MB · .log .txt .csv .json .evtx · analyzed on the server (your key is never sent to the browser)</p>
         <input type="file" id="fileInput" hidden />
       </div>
       <div id="fileMeta" style="margin-top:10px;color:var(--muted);font-size:13px"></div>
@@ -438,10 +438,15 @@ function renderStats(s) {
   const cells = [
     {k:"Lines", v: s.lines ?? "—"},
     {k:"Bytes", v: s.bytes != null ? s.bytes.toLocaleString() : "—"},
+  ];
+  if (s.file_type === "evtx") {
+    cells.push({k:"EVTX Records", v: s.evtx_records ?? "—"});
+  }
+  cells.push(
     {k:"Errors", v: errCount, warn: errCount>0},
     {k:"Warnings", v: warnCount, warn: warnCount>0},
     {k:"Unique IPs", v: s.unique_ips ?? "—"},
-  ];
+  );
   statsGrid.innerHTML = cells.map(c =>
     `<div class="stat"><div class="k">${c.k}</div><div class="v ${c.warn?"warn":""}">${c.v}</div></div>`
   ).join("");
