@@ -6,6 +6,7 @@ three OpenAI-compatible providers** through one local FastAPI backend:
 * **Azure AI Foundry** — `gpt-5-mini` (and `gpt-4o`, `gpt-4o-mini`). Default provider.
 * **Google Gemini** — `gemini-3.6-flash`, `gemini-3.5-flash` (via Gemini's OpenAI-compatible endpoint).
 * **Amazon Nova** — `nova-lite-v1`, `nova-pro-v1`, `nova-premier-v1`, `nova-micro-v1`, `nova-2-lite-v1`.
+* **Cohere** — `command-a-plus-05-2026`, `command-r7b-12-2024`, `command-r-plus` (native v2 chat API).
 
 It demonstrates:
 
@@ -106,6 +107,12 @@ GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 GEMINI_MODEL=gemini-3.6-flash
 GEMINI_MODELS=gemini-3.6-flash,gemini-3.5-flash
 
+# Cohere (optional) — native v2 chat API
+COHERE_API_KEY=your-cohere-key-here
+COHERE_BASE_URL=https://api.cohere.ai/v2
+COHERE_MODEL=command-a-plus-05-2026
+COHERE_MODELS=command-a-plus-05-2026,command-r7b-12-2024,command-r-plus
+
 # server / sandbox
 APP_HOST=0.0.0.0
 APP_PORT=8000
@@ -147,5 +154,5 @@ NOVA_SANDBOX=/home/dev/PROJECT/NOVA_Project   # read_file tool is confined here
 * The reasoning box populates only when the selected model/endpoint actually
   returns a reasoning payload (e.g. Foundry's gpt-5 may not surface it on the
   OpenAI-compatible route — the wiring is in place regardless).
-* Provider auth headers: Nova/Gemini use `Authorization: Bearer`; Foundry uses
+* Provider auth headers: Nova/Gemini/Cohere use `Authorization: Bearer`; Foundry uses
   `api-key`.

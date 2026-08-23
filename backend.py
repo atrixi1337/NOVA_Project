@@ -70,6 +70,15 @@ GEMINI_MODELS = [
     m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-3.6-flash,gemini-3.5-flash").split(",") if m.strip()
 ]
 
+# ---- provider: Cohere (native v2 chat API, not OpenAI-compatible in shape) ----
+COHERE_BASE_URL = os.getenv("COHERE_BASE_URL", "https://api.cohere.ai/v2")
+COHERE_API_KEY = os.getenv("COHERE_API_KEY", "")
+COHERE_DEFAULT_MODEL = os.getenv("COHERE_MODEL", "command-a-plus-05-2026")
+# Models offered for the Cohere provider in the UI picker.
+COHERE_MODELS = [
+    m.strip() for m in os.getenv("COHERE_MODELS", "command-a-plus-05-2026,command-r7b-12-2024,command-r-plus").split(",") if m.strip()
+]
+
 # ---- file analyzer config ----
 ANALYZE_MAX_CHARS = int(os.getenv("NOVA_ANALYZE_MAX_CHARS", "60000"))
 NOVA_MAX_UPLOAD_MB = int(os.getenv("NOVA_MAX_UPLOAD_MB", "10"))
@@ -160,6 +169,7 @@ PROVIDERS = {
     "foundry": {"label": "Azure Foundry", "base_url": FOUNDRY_BASE_URL, "default_model": FOUNDRY_DEFAULT_MODEL, "models": FOUNDRY_MODELS},
     "gemini": {"label": "Google Gemini", "base_url": GEMINI_BASE_URL, "default_model": GEMINI_DEFAULT_MODEL, "models": GEMINI_MODELS},
     "nova": {"label": "Amazon Nova", "base_url": NOVA_BASE_URL, "default_model": DEFAULT_MODEL, "models": AVAILABLE_MODELS},
+    "cohere": {"label": "Cohere", "base_url": COHERE_BASE_URL, "default_model": COHERE_DEFAULT_MODEL, "models": COHERE_MODELS},
 }
 
 # ----------------------------------------------------------------------------
@@ -361,6 +371,10 @@ async def call_llm(
     support extended reasoning (e.g. gpt-5 on Foundry).
     """
     prov = PROVIDERS.get(provider, PROVIDERS["nova"])
+    # Cohere's native v2 chat API has a different endpoint + response shape,
+    # so it gets its own call path. Everything else is OpenAI-compatible.
+    if provider == "cohere":
+        return await call_cohere(messages, model, api_key, tools)
     base_url = prov["base_url"]
 
     payload: Dict[str, Any] = {
@@ -437,6 +451,90 @@ async def call_llm(
     raise HTTPException(status_code=502, detail=last_err or "LLM request failed.")
 
 
+async def call_cohere(
+    messages: List[Dict[str, Any]],
+    model: str,
+    api_key: str,
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Call Cohere's native v2 /chat endpoint and normalise the response.
+
+    Cohere is NOT OpenAI-compatible in its response shape:
+      - content is a list of {type:"text", text:...} blocks
+      - usage lives under meta.billed_units / meta.tokens
+    We map it into the OpenAI-ish shape the rest of the app expects
+    (choices[0].message.content as a string, usage.*_tokens).
+    """
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    last_err: Optional[str] = None
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for attempt in range(2):
+            try:
+                resp = await client.post(
+                    f"{COHERE_BASE_URL}/chat",
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                    json=payload,
+                )
+            except httpx.HTTPError as e:
+                last_err = f"Network error contacting cohere: {e}"
+                logger.warning(last_err)
+                continue
+
+            if resp.status_code in (401, 403, 429):
+                raise HTTPException(status_code=resp.status_code, detail=_clean_error(resp, "cohere"))
+            if resp.status_code >= 500:
+                last_err = f"cohere gateway {resp.status_code} (transient)"
+                logger.warning("%s — retrying", last_err)
+                continue
+            if resp.status_code >= 400:
+                raise HTTPException(status_code=resp.status_code, detail=_clean_error(resp, "cohere"))
+
+            try:
+                parsed = resp.json()
+            except json.JSONDecodeError:
+                last_err = "cohere response was not valid JSON."
+                continue
+
+            msg = parsed.get("message", {})
+            # Cohere content is a list of blocks; join the text ones.
+            content_blocks = msg.get("content")
+            if isinstance(content_blocks, list):
+                text = "".join(
+                    b.get("text", "") for b in content_blocks if isinstance(b, dict) and b.get("type") == "text"
+                )
+            else:
+                text = str(content_blocks or "")
+            # Normalise into OpenAI-ish shape.
+            usage_raw = (parsed.get("meta") or {}).get("billed_units") or (parsed.get("meta") or {}).get("tokens") or {}
+            normalised = {
+                "id": parsed.get("id"),
+                "model": parsed.get("model") or model,
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": text,
+                        "tool_calls": msg.get("tool_calls"),
+                    }
+                }],
+                "usage": {
+                    "prompt_tokens": usage_raw.get("input_tokens", 0),
+                    "completion_tokens": usage_raw.get("output_tokens", 0),
+                    "total_tokens": usage_raw.get("input_tokens", 0) + usage_raw.get("output_tokens", 0),
+                },
+            }
+            return normalised
+
+    raise HTTPException(status_code=502, detail=last_err or "Cohere request failed.")
+
+
 def _clean_error(resp: httpx.Response, provider: str = "nova") -> str:
     """Map HTTP errors from a provider to a short, human-readable message."""
     name = PROVIDERS.get(provider, {}).get("label", provider)
@@ -486,6 +584,8 @@ def _provider_key(provider: str) -> str:
         return FOUNDRY_API_KEY
     if provider == "gemini":
         return GEMINI_API_KEY
+    if provider == "cohere":
+        return COHERE_API_KEY
     return NOVA_API_KEY
 
 
