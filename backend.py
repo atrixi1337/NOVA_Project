@@ -157,6 +157,19 @@ OPENROUTER_MODELS = [
     m.strip() for m in os.getenv("OPENROUTER_MODELS", "openrouter/free").split(",") if m.strip()
 ]
 
+# ---- provider: Mistral AI (OpenAI-compatible; genuine free tier) ----
+# Censored (cloud). Genuine free tier on mistral-small-latest (rate-limited).
+# Uses MISTRAL_API_KEY. Standard OpenAI-compatible /v1/chat/completions.
+MISTRAL_BASE_URL = os.getenv("MISTRAL_BASE_URL", "https://api.mistral.ai/v1")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
+MISTRAL_DEFAULT_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+MISTRAL_MODELS = [
+    m.strip() for m in os.getenv(
+        "MISTRAL_MODELS",
+        "mistral-small-latest,mistral-large-latest,open-mistral-7b,ministral-8b-latest",
+    ).split(",") if m.strip()
+]
+
 # ---- provider: Cloudflare Workers AI (OpenAI-compatible; free 10k neurons/day) ----
 # Censored (cloud). Needs CLOUDFLARE_ACCOUNT_ID (in the base URL) + an API token
 # with Workers AI permission. Free tier = 10,000 Neurons/day (resets 00:00 UTC).
@@ -297,6 +310,7 @@ PROVIDERS = {
     "hfrouter": {"label": "HuggingFace Router (free, cloud)", "base_url": HFROUTER_BASE_URL, "default_model": HFROUTER_DEFAULT_MODEL, "models": HFROUTER_MODELS, "cloud": True},
     "requesty": {"label": "Requesty (free, cloud)", "base_url": REQUESTY_BASE_URL, "default_model": REQUESTY_DEFAULT_MODEL, "models": REQUESTY_MODELS, "cloud": True},
     "cloudflare": {"label": "Cloudflare Workers AI (free, cloud)", "base_url": CLOUDFLARE_BASE_URL, "default_model": CLOUDFLARE_DEFAULT_MODEL, "models": CLOUDFLARE_MODELS, "cloud": True},
+    "mistral": {"label": "Mistral AI (free tier, cloud)", "base_url": MISTRAL_BASE_URL, "default_model": MISTRAL_DEFAULT_MODEL, "models": MISTRAL_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -771,6 +785,8 @@ def _provider_key(provider: str) -> str:
         return REQUESTY_API_KEY
     if provider == "cloudflare":
         return CLOUDFLARE_API_TOKEN
+    if provider == "mistral":
+        return MISTRAL_API_KEY
     return NOVA_API_KEY
 
 

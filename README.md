@@ -19,6 +19,8 @@ OpenAI-compatible providers** through one local FastAPI backend:
 * **Cloudflare Workers AI** — free 10,000 Neurons/day tier. Models:
   `@cf/qwen/qwen3.8-27b` (27B, vision+reasoning), `@cf/meta/llama-3.1-8b-instruct`,
   `@cf/meta/llama-3.2-3b-instruct`. *(cloud, censored)*
+* **Mistral AI** — genuine free tier on `mistral-small-latest` (rate-limited);
+  also `mistral-large-latest`, `open-mistral-7b`, `ministral-8b-latest`. *(cloud, censored)*
 
 > **Censored vs uncensored:** every provider marked *(cloud, censored)* runs on a
 > hosted service with its own safety filtering and will refuse some requests. The
@@ -164,6 +166,12 @@ CLOUDFLARE_BASE_URL=https://api.cloudflare.com/client/v4/accounts/your-cloudflar
 CLOUDFLARE_MODEL=@cf/qwen/qwen3.8-27b
 CLOUDFLARE_MODELS=@cf/qwen/qwen3.8-27b,@cf/meta/llama-3.1-8b-instruct,@cf/meta/llama-3.2-3b-instruct
 
+# Mistral AI (optional) — genuine free tier on mistral-small-latest (rate-limited)
+MISTRAL_API_KEY=your-mistral-key-here
+MISTRAL_BASE_URL=https://api.mistral.ai/v1
+MISTRAL_MODEL=mistral-small-latest
+MISTRAL_MODELS=mistral-small-latest,mistral-large-latest,open-mistral-7b,ministral-8b-latest
+
 # server / sandbox
 APP_HOST=0.0.0.0
 APP_PORT=8000
@@ -174,9 +182,9 @@ NOVA_SANDBOX=/home/dev/PROJECT/NOVA_Project   # read_file tool is confined here
 
 * Pick a **Provider** from the top dropdown (Local Ollama / Azure Foundry / Google
   Gemini / Amazon Nova / Cohere / OpenRouter / HuggingFace Router / Requesty /
-  Cloudflare Workers AI). The **Model** list repopulates for that provider
-  automatically. Cloud providers are tagged so you know they're censored; Ollama is
-  the uncensored local default.
+  Cloudflare Workers AI / Mistral AI). The **Model** list repopulates for that
+  provider automatically. Cloud providers are tagged so you know they're censored;
+  Ollama is the uncensored local default.
 * Pick a **Reasoning** level (low/medium/high) when using a reasoning model — the
   model's thinking is shown in a collapsed "🧠 Model reasoning" box.
 * Type a message and hit Enter. Flip **Agent mode** to let the model use tools:
