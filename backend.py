@@ -79,6 +79,17 @@ COHERE_MODELS = [
     m.strip() for m in os.getenv("COHERE_MODELS", "command-a-plus-05-2026,command-r7b-12-2024,command-r-plus").split(",") if m.strip()
 ]
 
+# ---- provider: Local Ollama (OpenAI-compatible /v1; uncensored local models) ----
+# Ollama serves an OpenAI-compatible endpoint at <host>/v1/chat/completions.
+# The api_key is required by the OpenAI client shape but IGNORED by Ollama.
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "ollama")
+OLLAMA_DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "dolphin3.0:8b")
+# Models offered for the Ollama provider in the UI picker.
+OLLAMA_MODELS = [
+    m.strip() for m in os.getenv("OLLAMA_MODELS", "dolphin3.0:8b").split(",") if m.strip()
+]
+
 # ---- file analyzer config ----
 ANALYZE_MAX_CHARS = int(os.getenv("NOVA_ANALYZE_MAX_CHARS", "60000"))
 NOVA_MAX_UPLOAD_MB = int(os.getenv("NOVA_MAX_UPLOAD_MB", "10"))
@@ -170,6 +181,7 @@ PROVIDERS = {
     "gemini": {"label": "Google Gemini", "base_url": GEMINI_BASE_URL, "default_model": GEMINI_DEFAULT_MODEL, "models": GEMINI_MODELS},
     "nova": {"label": "Amazon Nova", "base_url": NOVA_BASE_URL, "default_model": DEFAULT_MODEL, "models": AVAILABLE_MODELS},
     "cohere": {"label": "Cohere", "base_url": COHERE_BASE_URL, "default_model": COHERE_DEFAULT_MODEL, "models": COHERE_MODELS},
+    "ollama": {"label": "Local Ollama (uncensored)", "base_url": OLLAMA_BASE_URL, "default_model": OLLAMA_DEFAULT_MODEL, "models": OLLAMA_MODELS},
 }
 
 # ----------------------------------------------------------------------------
@@ -364,11 +376,13 @@ async def call_llm(
     tools: Optional[List[Dict[str, Any]]] = None,
     reasoning_effort: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Send a chat completion to the chosen provider (Nova, Foundry, or Gemini).
+    """Send a chat completion to the chosen provider.
 
-    All three are OpenAI-compatible; they differ only in base URL + auth header.
-    `reasoning_effort` (low/medium/high) is passed through for models that
-    support extended reasoning (e.g. gpt-5 on Foundry).
+    OpenAI-compatible providers (Nova, Foundry, Gemini, and local Ollama) share
+    the same /chat/completions path; they differ only in base URL + auth header.
+    Cohere is special-cased into its own call path. `reasoning_effort`
+    (low/medium/high) is passed through for models that support extended
+    reasoning (e.g. gpt-5 on Foundry).
     """
     prov = PROVIDERS.get(provider, PROVIDERS["nova"])
     # Cohere's native v2 chat API has a different endpoint + response shape,
@@ -393,7 +407,8 @@ async def call_llm(
     last_err: Optional[str] = None
     # Reasoning models (e.g. gpt-5 with effort) can take much longer; give them
     # a generous timeout so a deep analysis doesn't get cut off mid-think.
-    timeout = 180.0 if reasoning_effort else 60.0
+    # Local Ollama also gets 180s (model cold-load + slow 8B decode on big logs).
+    timeout = 180.0 if reasoning_effort else (180.0 if provider == "ollama" else 60.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(2):  # one retry for transient gateway 5xx
             try:
@@ -588,6 +603,9 @@ def _provider_key(provider: str) -> str:
         return GEMINI_API_KEY
     if provider == "cohere":
         return COHERE_API_KEY
+    if provider == "ollama":
+        # Ollama ignores the key, but report it so /api/health shows configured.
+        return OLLAMA_API_KEY
     return NOVA_API_KEY
 
 
