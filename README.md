@@ -1,12 +1,27 @@
 # AI POC — multi-provider AI chat & log analyzer (proof of concept)
 
-A small local web app that proxies chat and log-analysis requests to **any of
-three OpenAI-compatible providers** through one local FastAPI backend:
+A small local web app that proxies chat and log-analysis requests to **several
+OpenAI-compatible providers** through one local FastAPI backend:
 
-* **Azure AI Foundry** — `gpt-5-mini` (and `gpt-4o`, `gpt-4o-mini`). Default provider.
-* **Google Gemini** — `gemini-3.6-flash`, `gemini-3.5-flash` (via Gemini's OpenAI-compatible endpoint).
-* **Amazon Nova** — `nova-lite-v1`, `nova-pro-v1`, `nova-premier-v1`, `nova-micro-v1`, `nova-2-lite-v1`.
-* **Cohere** — `command-a-plus-05-2026`, `command-r7b-12-2024`, `command-r-plus` (native v2 chat API).
+* **Local Ollama** *(default)* — uncensored local models, no API key. Ships with
+  `dolphin3.0:8b` (Dolphin 3.0 Llama 3.1 8B, Q4). Runs fully offline on your GPU;
+  auto-evicted from VRAM after idle. **This is the only truly uncensored provider.**
+* **Azure AI Foundry** — `gpt-5-mini` (and `gpt-4o`, `gpt-4o-mini`). *(cloud, censored)*
+* **Google Gemini** — `gemini-3.6-flash`, `gemini-3.5-flash` (via Gemini's OpenAI-compatible endpoint). *(cloud, censored)*
+* **Amazon Nova** — `nova-lite-v1`, `nova-pro-v1`, `nova-premier-v1`, `nova-micro-v1`, `nova-2-lite-v1`. *(cloud, censored)*
+* **Cohere** — `command-a-plus-05-2026`, `command-r7b-12-2024`, `command-r-plus` (native v2 chat API). *(cloud, censored)*
+* **OpenRouter** — `openrouter/free` auto-router (routes to any available free model, e.g. `nvidia/nemotron-nano-9b-v2:free`). *(cloud, censored)*
+* **HuggingFace Inference Providers router** — free models: `openai/gpt-oss-20b`,
+  `zai-org/GLM-5.2`, `meta-models/Muse-Glimmer-30B`, `inclusionAI/Ling-3.0-flash`,
+  `meta-llama/Llama-3.1-8B-Instruct`. *(cloud, censored)*
+* **Requesty** — free models: `nvidia/nemotron-3.5-lightning-30b-a3b`,
+  `nvidia/muse-glimmer-30b`, `novita/inclusionai/ling-3.0-tiny`. *(cloud, censored)*
+
+> **Censored vs uncensored:** every provider marked *(cloud, censored)* runs on a
+> hosted service with its own safety filtering and will refuse some requests. The
+> local Ollama provider is the only one with no external filter — use it for the
+> authorised security-research workloads. The cloud routers are useful as a
+> capability fallback when the local 8B is too weak for a task.
 
 It demonstrates:
 
@@ -84,11 +99,19 @@ App is on http://localhost:8000.
 ## Configuration (`.env`)
 
 All keys are optional — only configure the providers you use. The UI defaults to
-`DEFAULT_PROVIDER` (set to `foundry`).
+`DEFAULT_PROVIDER` (set to `ollama`).
 
 ```ini
-# Which provider the UI loads by default: foundry | gemini | nova
-DEFAULT_PROVIDER=foundry
+# Which provider the UI loads by default:
+#   ollama | foundry | gemini | nova | cohere | openrouter | hfrouter | requesty
+DEFAULT_PROVIDER=ollama
+
+# Local Ollama (uncensored local models, no API key) — default provider
+OLLAMA_API_KEY=ollama          # ignored by Ollama, shown for parity only
+OLLAMA_BASE_URL=http://localhost:11434/v1
+OLLAMA_MODEL=dolphin3.0:8b
+OLLAMA_MODELS=dolphin3.0:8b
+OLLAMA_IDLE_UNLOAD=300          # seconds of inactivity before VRAM eviction (0 = never)
 
 # Amazon Nova (optional)
 NOVA_API_KEY=your-nova-key-here
@@ -113,6 +136,24 @@ COHERE_BASE_URL=https://api.cohere.ai/v2
 COHERE_MODEL=command-a-plus-05-2026
 COHERE_MODELS=command-a-plus-05-2026,command-r7b-12-2024,command-r-plus
 
+# OpenRouter (optional) — free auto-router; openrouter/free routes to any free model
+OPENROUTER_API_KEY=your-openrouter-key-here
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=openrouter/free
+OPENROUTER_MODELS=openrouter/free
+
+# HuggingFace Inference Providers router (optional) — uses your HF token
+HF_TOKEN=your-huggingface-token-here
+HFROUTER_BASE_URL=https://router.huggingface.co/v1
+HFROUTER_MODEL=openai/gpt-oss-20b
+HFROUTER_MODELS=openai/gpt-oss-20b,zai-org/GLM-5.2,meta-models/Muse-Glimmer-30B,inclusionAI/Ling-3.0-flash,meta-llama/Llama-3.1-8B-Instruct
+
+# Requesty (optional) — free models, 200 req/day, no card
+REQUESTY_API_KEY=your-requesty-key-here
+REQUESTY_BASE_URL=https://router.requesty.ai/v1
+REQUESTY_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
+REQUESTY_MODELS=nvidia/nemotron-3.5-lightning-30b-a3b,nvidia/muse-glimmer-30b,novita/inclusionai/ling-3.0-tiny
+
 # server / sandbox
 APP_HOST=0.0.0.0
 APP_PORT=8000
@@ -121,8 +162,10 @@ NOVA_SANDBOX=/home/dev/PROJECT/NOVA_Project   # read_file tool is confined here
 
 ## Using it
 
-* Pick a **Provider** from the top dropdown (Azure Foundry / Google Gemini / Amazon
-  Nova). The **Model** list repopulates for that provider automatically.
+* Pick a **Provider** from the top dropdown (Local Ollama / Azure Foundry / Google
+  Gemini / Amazon Nova / Cohere / OpenRouter / HuggingFace Router / Requesty). The
+  **Model** list repopulates for that provider automatically. Cloud providers are
+  tagged so you know they're censored; Ollama is the uncensored local default.
 * Pick a **Reasoning** level (low/medium/high) when using a reasoning model — the
   model's thinking is shown in a collapsed "🧠 Model reasoning" box.
 * Type a message and hit Enter. Flip **Agent mode** to let the model use tools:
@@ -148,7 +191,7 @@ NOVA_SANDBOX=/home/dev/PROJECT/NOVA_Project   # read_file tool is confined here
 
 * This is a **PoC for a local lab**. No auth, no rate limiting, no production
   hardening. Don't expose it to the public internet as-is.
-* `read_file` is confined to `NOVA_SANDBOX` (default `~/Downloads`) so the agent
+* `read_file` is confined to `NOVA_SANDBOX` (default `/home/dev/PROJECT/NOVA_Project`) so the agent
   can't read arbitrary system files.
 * `calculate` only permits arithmetic via an AST allow-list (no code exec).
 * The reasoning box populates only when the selected model/endpoint actually
