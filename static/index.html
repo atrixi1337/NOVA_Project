@@ -36,6 +36,13 @@
   .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 6px; }
   .status-dot.live { background: #3fd07a; box-shadow: 0 0 8px #3fd07a; }
   .spacer { flex: 1; }
+  .ollama-ctl { display: inline-flex; align-items: center; gap: 6px; }
+  .mini { padding: 4px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border);
+          background: var(--panel-2); color: var(--text); cursor: pointer; }
+  .mini:hover { border-color: var(--accent); }
+  .mini:disabled { opacity: .5; cursor: default; }
+  #ollamaState.loaded { color: #4ade80; }
+  #ollamaState.unloaded { color: var(--muted); }
   label.ctl { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
   select, input[type="text"], input[type="password"] {
     background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
@@ -169,6 +176,12 @@
   <label class="ctl">Key (optional)
     <input type="password" id="keyInput" placeholder="override server key" size="16" />
   </label>
+
+  <span class="ctl ollama-ctl" id="ollamaCtl" hidden>
+    <span id="ollamaState" style="font-size:12px;color:var(--muted)">local model: …</span>
+    <button class="mini" id="ollamaLoadBtn" title="Pre-load local model into VRAM">Load</button>
+    <button class="mini" id="ollamaUnloadBtn" title="Free local model VRAM">Unload</button>
+  </span>
 </header>
 
 <!-- ============ CHAT VIEW ============ -->
@@ -247,6 +260,50 @@ let PROVIDER_MODELS = {}; // pid -> [models]
 let PROVIDER_DEFAULTS = {}; // pid -> default model
 let DEFAULT_PROVIDER = "foundry";
 
+// ---- local Ollama load/unload controls ----
+const ollamaCtl = document.getElementById("ollamaCtl");
+const ollamaState = document.getElementById("ollamaState");
+const ollamaLoadBtn = document.getElementById("ollamaLoadBtn");
+const ollamaUnloadBtn = document.getElementById("ollamaUnloadBtn");
+
+function refreshOllamaCtl() {
+  // Only surface the Load/Unload controls when the selected provider is local Ollama.
+  ollamaCtl.hidden = providerSelect.value !== "ollama";
+}
+async function updateOllamaStatus() {
+  if (providerSelect.value !== "ollama") return;
+  try {
+    const s = await fetch("/api/ollama/status").then(r => r.json());
+    if (!s.native_reachable) {
+      ollamaState.textContent = "local model: ollama offline";
+      ollamaState.className = "unloaded";
+      ollamaLoadBtn.disabled = false; ollamaUnloadBtn.disabled = true;
+      return;
+    }
+    const loaded = !!s.loaded;
+    ollamaState.textContent = loaded ? "local model: loaded (VRAM)" : "local model: unloaded";
+    ollamaState.className = loaded ? "loaded" : "unloaded";
+    ollamaLoadBtn.disabled = loaded;
+    ollamaUnloadBtn.disabled = !loaded;
+  } catch (e) { /* ignore */ }
+}
+ollamaLoadBtn.addEventListener("click", async () => {
+  ollamaLoadBtn.disabled = true; ollamaState.textContent = "local model: loading…";
+  try {
+    await fetch("/api/ollama/load", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+  } catch (e) {}
+  await updateOllamaStatus();
+});
+ollamaUnloadBtn.addEventListener("click", async () => {
+  ollamaUnloadBtn.disabled = true; ollamaState.textContent = "local model: unloading…";
+  try {
+    await fetch("/api/ollama/unload", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+  } catch (e) {}
+  await updateOllamaStatus();
+});
+providerSelect.addEventListener("change", () => { refreshOllamaCtl(); updateOllamaStatus(); });
+
+
 // ---- tab switching ----
 document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => {
@@ -281,6 +338,8 @@ async function init() {
     }
     // trigger initial model population
     providerSelect.dispatchEvent(new Event("change"));
+    refreshOllamaCtl();
+    updateOllamaStatus();
   } catch (e) { /* ignore */ }
   checkHealth();
 }

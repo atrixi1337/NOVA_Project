@@ -90,6 +90,63 @@ OLLAMA_MODELS = [
     m.strip() for m in os.getenv("OLLAMA_MODELS", "dolphin3.0:8b").split(",") if m.strip()
 ]
 
+# Ollama's OpenAI-compatible route (/v1) IGNORES keep_alive, so model load/unload
+# must go through the native API (/api/chat). Derive the native root from the
+# configured base URL (strip the trailing /v1).
+OLLAMA_NATIVE_BASE = OLLAMA_BASE_URL.rsplit("/v1", 1)[0].rstrip("/") or "http://localhost:11434"
+# Seconds of idle time before the local model is auto-offloaded from VRAM.
+OLLAMA_IDLE_UNLOAD = int(os.getenv("OLLAMA_IDLE_UNLOAD", "300"))
+
+import asyncio
+import time
+
+_last_ollama_use = 0.0
+_ollama_watchdog_task = None
+
+async def _ollama_native_call(path: str, payload: dict, timeout: float = 60.0):
+    """POST to Ollama's native API (used for keep_alive load/unload control)."""
+    async with httpx.AsyncClient(timeout=timeout) as c:
+        r = await c.post(f"{OLLAMA_NATIVE_BASE}{path}", json=payload)
+        try:
+            body = r.json()
+        except Exception:
+            body = r.text
+        return r.status_code, body
+
+async def ollama_status() -> dict:
+    """Probe Ollama's native /api/ps for loaded-model state."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.get(f"{OLLAMA_NATIVE_BASE}/api/ps")
+            if r.status_code == 200:
+                models = (r.json() or {}).get("models", [])
+                return {"native_reachable": True, "loaded": bool(models), "models": models}
+    except Exception:
+        pass
+    return {"native_reachable": False, "loaded": False, "models": []}
+
+async def _ollama_watchdog():
+    """Auto-offload the local model after OLLAMA_IDLE_UNLOAD seconds of no use."""
+    global _ollama_watchdog_task
+    while True:
+        await asyncio.sleep(OLLAMA_IDLE_UNLOAD)
+        if time.time() - _last_ollama_use >= OLLAMA_IDLE_UNLOAD - 1:
+            await _ollama_native_call(
+                "/api/chat",
+                {"model": OLLAMA_DEFAULT_MODEL, "messages": [{"role": "user", "content": "."}],
+                 "keep_alive": 0, "stream": False},
+                timeout=30.0,
+            )
+            _ollama_watchdog_task = None
+            return
+
+def _ollama_touch():
+    """Mark the local model as recently used; (re)arm the idle-offload watchdog."""
+    global _last_ollama_use, _ollama_watchdog_task
+    _last_ollama_use = time.time()
+    if _ollama_watchdog_task is None or _ollama_watchdog_task.done():
+        _ollama_watchdog_task = asyncio.create_task(_ollama_watchdog())
+
 # ---- file analyzer config ----
 ANALYZE_MAX_CHARS = int(os.getenv("NOVA_ANALYZE_MAX_CHARS", "60000"))
 NOVA_MAX_UPLOAD_MB = int(os.getenv("NOVA_MAX_UPLOAD_MB", "10"))
@@ -390,6 +447,9 @@ async def call_llm(
     # so it gets its own call path. Everything else is OpenAI-compatible.
     if provider == "cohere":
         return await call_cohere(messages, model, api_key, tools)
+    # Mark local model as in-use so the idle watchdog doesn't evict it mid-turn.
+    if provider == "ollama":
+        _ollama_touch()
     base_url = prov["base_url"]
 
     payload: Dict[str, Any] = {
@@ -594,6 +654,45 @@ async def health():
         },
         "sandbox_root": str(SANDBOX_ROOT),
     }
+
+
+# ----------------------------------------------------------------------------
+# Local Ollama model load / unload / status
+# ----------------------------------------------------------------------------
+@app.get("/api/ollama/status")
+async def ollama_status_route():
+    st = await ollama_status()
+    st["native_base"] = OLLAMA_NATIVE_BASE
+    st["idle_unload_s"] = OLLAMA_IDLE_UNLOAD
+    return st
+
+
+@app.post("/api/ollama/load")
+async def ollama_load(req: Optional[Dict[str, Any]] = None):
+    """Pre-load the local model into VRAM (warm start) via Ollama's native API.
+    keep_alive=-1 pins it in memory until an explicit unload or idle timeout."""
+    model = (req or {}).get("model") or OLLAMA_DEFAULT_MODEL
+    code, body = await _ollama_native_call(
+        "/api/chat",
+        {"model": model, "messages": [{"role": "user", "content": "ping"}],
+         "keep_alive": -1, "stream": False},
+        timeout=120.0,
+    )
+    _ollama_touch()
+    return {"ok": code == 200, "model": model, "status": code, "loaded": True}
+
+
+@app.post("/api/ollama/unload")
+async def ollama_unload(req: Optional[Dict[str, Any]] = None):
+    """Evict the local model from VRAM (free it for other GPU work)."""
+    model = (req or {}).get("model") or OLLAMA_DEFAULT_MODEL
+    code, body = await _ollama_native_call(
+        "/api/chat",
+        {"model": model, "messages": [{"role": "user", "content": "."}],
+         "keep_alive": 0, "stream": False},
+        timeout=30.0,
+    )
+    return {"ok": code == 200, "model": model, "status": code, "loaded": False}
 
 
 def _provider_key(provider: str) -> str:
