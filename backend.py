@@ -147,6 +147,42 @@ def _ollama_touch():
     if _ollama_watchdog_task is None or _ollama_watchdog_task.done():
         _ollama_watchdog_task = asyncio.create_task(_ollama_watchdog())
 
+# ---- provider: OpenRouter (OpenAI-compatible router; free auto-router model) ----
+# openrouter/free routes to whatever free model is available. CLOUD + censored
+# (unlike local Ollama) - useful as a capability fallback when 8B local is weak.
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
+OPENROUTER_MODELS = [
+    m.strip() for m in os.getenv("OPENROUTER_MODELS", "openrouter/free").split(",") if m.strip()
+]
+
+# ---- provider: HuggingFace Inference Providers router (OpenAI-compatible) ----
+# Routes to 15+ partners; free catalog is limited + censored. Uses your HF token.
+HFROUTER_BASE_URL = os.getenv("HFROUTER_BASE_URL", "https://router.huggingface.co/v1")
+HFROUTER_API_KEY = os.getenv("HF_TOKEN", "")
+HFROUTER_DEFAULT_MODEL = os.getenv("HFROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
+HFROUTER_MODELS = [
+    m.strip() for m in os.getenv(
+        "HFROUTER_MODELS",
+        "nvidia/nemotron-3.5-lightning:free,openai/gpt-oss-20b:free,"
+        "nvidia/nemotron-3-super-120b-a12b:free,z-ai/glm-5.2:free",
+    ).split(",") if m.strip()
+]
+
+# ---- provider: Requesty (OpenAI-compatible router; free models, no card) ----
+# Free tier = 200 req/day. Models below are free on Requesty. Censored (cloud).
+REQUESTY_BASE_URL = os.getenv("REQUESTY_BASE_URL", "https://router.requesty.ai/v1")
+REQUESTY_API_KEY = os.getenv("REQUESTY_API_KEY", "")
+REQUESTY_DEFAULT_MODEL = os.getenv("REQUESTY_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
+REQUESTY_MODELS = [
+    m.strip() for m in os.getenv(
+        "REQUESTY_MODELS",
+        "nvidia/nemotron-3.5-lightning-30b-a3b,nvidia/muse-glimmer-30b,"
+        "novita/inclusionai/ling-3.0-tiny",
+    ).split(",") if m.strip()
+]
+
 # ---- file analyzer config ----
 ANALYZE_MAX_CHARS = int(os.getenv("NOVA_ANALYZE_MAX_CHARS", "60000"))
 NOVA_MAX_UPLOAD_MB = int(os.getenv("NOVA_MAX_UPLOAD_MB", "10"))
@@ -240,6 +276,9 @@ PROVIDERS = {
     "nova": {"label": "Amazon Nova", "base_url": NOVA_BASE_URL, "default_model": DEFAULT_MODEL, "models": AVAILABLE_MODELS},
     "cohere": {"label": "Cohere", "base_url": COHERE_BASE_URL, "default_model": COHERE_DEFAULT_MODEL, "models": COHERE_MODELS},
     "ollama": {"label": "Local Ollama (uncensored)", "base_url": OLLAMA_BASE_URL, "default_model": OLLAMA_DEFAULT_MODEL, "models": OLLAMA_MODELS},
+    "openrouter": {"label": "OpenRouter (free, cloud)", "base_url": OPENROUTER_BASE_URL, "default_model": OPENROUTER_DEFAULT_MODEL, "models": OPENROUTER_MODELS, "cloud": True},
+    "hfrouter": {"label": "HuggingFace Router (free, cloud)", "base_url": HFROUTER_BASE_URL, "default_model": HFROUTER_DEFAULT_MODEL, "models": HFROUTER_MODELS, "cloud": True},
+    "requesty": {"label": "Requesty (free, cloud)", "base_url": REQUESTY_BASE_URL, "default_model": REQUESTY_DEFAULT_MODEL, "models": REQUESTY_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -706,6 +745,12 @@ def _provider_key(provider: str) -> str:
     if provider == "ollama":
         # Ollama ignores the key, but report it so /api/health shows configured.
         return OLLAMA_API_KEY
+    if provider == "openrouter":
+        return OPENROUTER_API_KEY
+    if provider == "hfrouter":
+        return HFROUTER_API_KEY
+    if provider == "requesty":
+        return REQUESTY_API_KEY
     return NOVA_API_KEY
 
 
