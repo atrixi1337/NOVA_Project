@@ -161,12 +161,12 @@ OPENROUTER_MODELS = [
 # Routes to 15+ partners; free catalog is limited + censored. Uses your HF token.
 HFROUTER_BASE_URL = os.getenv("HFROUTER_BASE_URL", "https://router.huggingface.co/v1")
 HFROUTER_API_KEY = os.getenv("HF_TOKEN", "")
-HFROUTER_DEFAULT_MODEL = os.getenv("HFROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
+HFROUTER_DEFAULT_MODEL = os.getenv("HFROUTER_MODEL", "openai/gpt-oss-20b")
 HFROUTER_MODELS = [
     m.strip() for m in os.getenv(
         "HFROUTER_MODELS",
-        "nvidia/nemotron-3.5-lightning:free,openai/gpt-oss-20b:free,"
-        "nvidia/nemotron-3-super-120b-a12b:free,z-ai/glm-5.2:free",
+        "openai/gpt-oss-20b,zai-org/GLM-5.2,meta-models/Muse-Glimmer-30B,"
+        "inclusionAI/Ling-3.0-flash,meta-llama/Llama-3.1-8B-Instruct",
     ).split(",") if m.strip()
 ]
 
@@ -756,7 +756,11 @@ def _provider_key(provider: str) -> str:
 
 def _resolve_model(provider: str, model: str) -> str:
     prov = PROVIDERS.get(provider, PROVIDERS["nova"])
-    return model or prov["default_model"]
+    # Treat the sentinels "auto"/"default" as "use this provider's configured default".
+    # An empty string also falls through to the default.
+    if not model or model in ("auto", "default"):
+        return prov["default_model"]
+    return model
 
 
 @app.post("/api/chat")
