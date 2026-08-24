@@ -30,7 +30,9 @@ OpenAI-compatible providers** through one local FastAPI backend:
 
 It demonstrates:
 
-* A clean dark chat UI with a **Provider + Model** picker so you can switch backends live.
+* A polished React chat UI (dark, mobile-friendly) with a **Provider + Model** picker
+  so you can switch backends live, markdown + code highlighting, reasoning box, and
+  an agent tool-trace panel.
 * **Agent mode**: the model can call *safe local tools* — `get_time`, `calculate`,
   and a sandboxed `read_file` — then summarise the results.
 * **Reasoning effort** control (low/medium/high) for reasoning models, with a
@@ -100,6 +102,27 @@ docker compose up -d --build
 ```
 
 App is on http://localhost:8000.
+
+## Frontend (React + Vite + Tailwind)
+
+The UI is a single-page React app (in `frontend/`) that talks to the FastAPI
+backend. `npm run build` compiles it into `static/` (which FastAPI serves), so a
+normal `systemctl restart nova-poc` picks up UI changes after a build.
+
+```bash
+cd ~/NOVA_Project/frontend
+npm install
+npm run dev        # live dev server on :5173 (proxies API same-origin)
+npm run build      # -> outputs to ../static (served by the backend on :8000)
+```
+
+Features of the UI:
+* Markdown rendering with syntax-highlighted code blocks + copy buttons.
+* Collapsible **🧠 Model reasoning** box (when a provider returns reasoning).
+* **🛠 Tool trace** panel in Agent mode (shows each tool call + result + token usage).
+* Provider + Model picker (all 10 providers, including the uncensored local Ollama default).
+* Ollama **Load/Unload** controls in the header (warm/cold VRAM).
+* **Log Analyzer** tab: upload `.log/.txt/.csv/.json/.evtx`, pick Security/General.
 
 ## Configuration (`.env`)
 
