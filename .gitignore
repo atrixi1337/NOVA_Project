@@ -7,3 +7,10 @@ __pycache__/
 nova_env/
 .venv/
 venv/
+
+# Frontend build deps (the compiled static/ is committed & served by FastAPI)
+frontend/node_modules/
+node_modules/
+frontend/dist/
+# Vite cache
+frontend/.vite/
