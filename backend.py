@@ -157,6 +157,23 @@ OPENROUTER_MODELS = [
     m.strip() for m in os.getenv("OPENROUTER_MODELS", "openrouter/free").split(",") if m.strip()
 ]
 
+# ---- provider: Cloudflare Workers AI (OpenAI-compatible; free 10k neurons/day) ----
+# Censored (cloud). Needs CLOUDFLARE_ACCOUNT_ID (in the base URL) + an API token
+# with Workers AI permission. Free tier = 10,000 Neurons/day (resets 00:00 UTC).
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
+CLOUDFLARE_BASE_URL = os.getenv(
+    "CLOUDFLARE_BASE_URL",
+    f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+)
+CLOUDFLARE_DEFAULT_MODEL = os.getenv("CLOUDFLARE_MODEL", "@cf/qwen/qwen3.8-27b")
+CLOUDFLARE_MODELS = [
+    m.strip() for m in os.getenv(
+        "CLOUDFLARE_MODELS",
+        "@cf/qwen/qwen3.8-27b,@cf/meta/llama-3.1-8b-instruct,@cf/meta/llama-3.2-3b-instruct",
+    ).split(",") if m.strip()
+]
+
 # ---- provider: HuggingFace Inference Providers router (OpenAI-compatible) ----
 # Routes to 15+ partners; free catalog is limited + censored. Uses your HF token.
 HFROUTER_BASE_URL = os.getenv("HFROUTER_BASE_URL", "https://router.huggingface.co/v1")
@@ -279,6 +296,7 @@ PROVIDERS = {
     "openrouter": {"label": "OpenRouter (free, cloud)", "base_url": OPENROUTER_BASE_URL, "default_model": OPENROUTER_DEFAULT_MODEL, "models": OPENROUTER_MODELS, "cloud": True},
     "hfrouter": {"label": "HuggingFace Router (free, cloud)", "base_url": HFROUTER_BASE_URL, "default_model": HFROUTER_DEFAULT_MODEL, "models": HFROUTER_MODELS, "cloud": True},
     "requesty": {"label": "Requesty (free, cloud)", "base_url": REQUESTY_BASE_URL, "default_model": REQUESTY_DEFAULT_MODEL, "models": REQUESTY_MODELS, "cloud": True},
+    "cloudflare": {"label": "Cloudflare Workers AI (free, cloud)", "base_url": CLOUDFLARE_BASE_URL, "default_model": CLOUDFLARE_DEFAULT_MODEL, "models": CLOUDFLARE_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -751,6 +769,8 @@ def _provider_key(provider: str) -> str:
         return HFROUTER_API_KEY
     if provider == "requesty":
         return REQUESTY_API_KEY
+    if provider == "cloudflare":
+        return CLOUDFLARE_API_TOKEN
     return NOVA_API_KEY
 
 
