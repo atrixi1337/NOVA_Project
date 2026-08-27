@@ -3,32 +3,25 @@ export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
+      // DeepAI-style palette: pure black, clean grays, subtle accent
       colors: {
-        // Core palette
-        bg: '#0a0e17',
-        sidebar: '#131722',
-        panel: '#131722',
-        panel2: '#1b2230',
-        border: '#2a3344',
-        text: '#e6edf3',
-        muted: '#8b97a7',
-        // Accents
+        bg: '#000000',
+        panel: '#0a0a0a',
+        panel2: '#121212',
+        border: '#1a1a1a',
+        border2: '#222222',
+        text: '#e0e0e0',
+        text2: '#a0a0a0',
+        muted: '#888888',
         accent: '#ff9900',
         accent2: '#4f9dff',
-        user: '#1f2a3a',
-        tool: '#13221c',
-        toolborder: '#2f6b4a',
+        user: '#1a1a1a',
         err: '#ff5d5d',
         ok: '#3fd07a',
       },
       fontFamily: {
-        sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
-        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
-      },
-      // Smooth transitions for interactive elements
-      transitionProperty: {
-        'colors': 'color, background-color, border-color, text-decoration-color, fill, stroke',
-        'opacity': 'opacity',
+        sans: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
       },
     },
   },

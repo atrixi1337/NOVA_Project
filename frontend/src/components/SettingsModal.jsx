@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
+import { api } from '../api.js'
 
-// Settings modal: shows provider status + lets users paste API keys.
-// Keys entered here are stored in localStorage and sent per-request
-// (the backend also reads them from env — UI keys override).
+// Store API keys in localStorage (overrides server-side keys per-request)
 const KEY_STORAGE = 'nova_api_keys'
 
 const PROVIDER_META = {
@@ -25,89 +24,202 @@ function saveKeys(keys) {
   localStorage.setItem(KEY_STORAGE, JSON.stringify(keys))
 }
 
-export default function SettingsModal({ open, onClose, health }) {
+// Settings modal: provider/model selection, API keys, reasoning, agent mode, ollama.
+export default function SettingsModal({
+  open, onClose,
+  providers, defaultProvider, provider, model,
+  setProvider, setModel, setAgent, setReasoning,
+  agent, reasoningEffort,
+  ollama, ollamaBusy, ollamaLoad, ollamaUnload,
+  health,
+}) {
   const [keys, setKeys] = useState({})
   const [saving, setSaving] = useState(false)
+  const inputRef = useRef(null)
 
   useEffect(() => {
     if (open) setKeys(loadKeys())
   }, [open])
 
   if (!open) return null
-  const mask = (v) => (v ? '•'.repeat(8) + v.slice(-4) : '')
+
+  const cur = providers[provider] || { models: [], default: '' }
+  const modelOpts = (cur.models || []).map((m) => ({ value: m, label: m }))
+  modelOpts.unshift({ value: 'auto', label: cur.default ? `auto (${cur.default})` : 'auto' })
+
+  const provOpts = Object.entries(providers).map(([id, p]) => ({
+    value: id,
+    label: p.label + (id === defaultProvider ? ' (default)' : ''),
+  }))
 
   const handleKey = (pid, val) => {
     setKeys({ ...keys, [pid]: val })
   }
 
-  const save = () => {
+  const saveKeysHandler = () => {
     setSaving(true)
     saveKeys(keys)
     setTimeout(() => setSaving(false), 300)
   }
 
-  const hasUICKey = (pid) => {
-    const k = keys[pid]
-    if (!k) return false
-    // Masked placeholder check — if it's the masked display, it's not a real stored key
-    return k !== mask(k)
-  }
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
          onClick={onClose}>
-      <div className="w-full max-w-2xl bg-panel border border-border rounded-2xl shadow-2xl m-4"
+      <div className="w-full max-w-lg bg-panel2 border border-border rounded-2xl shadow-2xl m-4 max-h-[85vh] overflow-y-auto"
            onClick={(e) => e.stopPropagation()}>
+
+        {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
-          <h3 className="font-semibold text-[15px] text-text">Provider Settings</h3>
+          <h3 className="font-semibold text-[15px] text-text">Settings</h3>
           <button onClick={onClose} className="p-1 text-muted hover:text-text rounded transition-colors">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
-        <div className="p-4 space-y-3 max-h-[500px] overflow-y-auto">
-          <p className="text-[12px] text-muted mb-2">
-            Keys you enter here are saved in your browser (<code className="text-[11px] bg-panel2 px-1 rounded">localStorage</code>)
-            and sent with each request. They never touch the server's own env. Local Ollama needs no key.
-          </p>
-          {Object.entries(PROVIDER_META).map(([pid, meta]) => {
-            const configured = health?.providers?.[pid]?.configured
-            const uiKey = keys[pid]
-            return (
-              <div key={pid} className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="text-[13px] font-medium text-text">{meta.label}</label>
-                  <span className="text-[11px] text-muted">
-                    {configured ? '✓ configured on server' : 'not configured on server'}
-                  </span>
-                </div>
-                {meta.key && (
-                  <input
-                    type="password"
-                    value={uiKey ? mask(uiKey) : ''}
-                    onChange={(e) => handleKey(pid, e.target.value)}
-                    placeholder={meta.placeholder}
-                    readOnly={uiKey ? true : false}
-                    className="w-full text-[13px] px-3 py-2 bg-panel2 border border-border rounded-lg text-text outline-none focus:border-accent2"
-                  />
-                )}
-                {meta.note && <span className="text-[11px] text-muted">{meta.note}</span>}
+
+        <div className="p-4 space-y-5">
+
+          {/* ── Provider & Model ── */}
+          <div className="space-y-3">
+            <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">Provider & Model</h4>
+            <div>
+              <label className="block text-[12px] text-muted mb-1">Provider</label>
+              <select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors"
+              >
+                {provOpts.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[12px] text-muted mb-1">Model</label>
+              <select
+                value={model || 'auto'}
+                onChange={(e) => setModel(e.target.value)}
+                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors"
+              >
+                {modelOpts.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            {cur.cloud && (
+              <div className="text-[11px] text-muted/60">
+                Cloud provider (censored). Local Ollama is the only uncensored option.
               </div>
-            )
-          })}
+            )}
+          </div>
+
+          {/* ── Reasoning & Agent ── */}
+          <div className="space-y-3">
+            <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">Chat Options</h4>
+            <div className="flex items-center gap-3">
+              <span className="text-[13px] text-muted">Agent mode</span>
+              <label className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors">
+                <input
+                  type="checkbox"
+                  checked={agent}
+                  onChange={(e) => setAgent(e.target.checked)}
+                  className="sr-only"
+                />
+                <span className={`inline-block h-5 w-9 rounded-full transition-colors ${agent ? 'bg-accent2' : 'bg-border'}`}>
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-panel2 transition-transform ${agent ? 'translate-x-5' : 'translate-x-1'}`} />
+                </span>
+              </label>
+            </div>
+            <div>
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="text-muted">Reasoning effort</span>
+                <span className="text-text font-medium">{reasoningEffort || 'off'}</span>
+              </div>
+              <div className="mt-1">
+                <select
+                  value={reasoningEffort || ''}
+                  onChange={(e) => setReasoning(e.target.value)}
+                  className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors"
+                >
+                  <option value="">Off</option>
+                  <option value="low">Low</option>
+                  <option value="high">High</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Ollama ── */}
+          {provider === 'ollama' && (
+            <div className="space-y-3">
+              <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">Local Ollama</h4>
+              <div className="flex items-center gap-2.5">
+                <span className={`text-[13px] font-medium ${ollama.loaded ? 'text-ok' : 'text-muted'}`}>
+                  {ollama.loaded ? `● ${ollama.model || 'loaded'}` : '○ not loaded'}
+                </span>
+                <button
+                  onClick={ollamaLoad}
+                  disabled={ollamaBusy || ollama.loaded}
+                  className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-black hover:border-accent2 disabled:opacity-40 transition-all"
+                >{ollamaBusy ? '...' : 'Load'}</button>
+                <button
+                  onClick={ollamaUnload}
+                  disabled={ollamaBusy || !ollama.loaded}
+                  className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-black hover:border-err disabled:opacity-40 transition-all"
+                >Unload</button>
+              </div>
+            </div>
+          )}
+
+          {/* ── API Keys ── */}
+          <div className="space-y-3">
+            <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">API Keys (optional override)</h4>
+            <p className="text-[11px] text-muted/60">
+              Keys entered here are saved in your browser (<code className="text-[10px] bg-black px-1 rounded">localStorage</code>)
+              and sent with each request. Leave blank to use server-configured keys.
+            </p>
+            <div className="space-y-3 max-h-64 overflow-y-auto">
+              {Object.entries(PROVIDER_META).map(([pid, meta]) => {
+                const configured = health?.providers?.[pid]?.configured
+                const uiKey = keys[pid]
+                return (
+                  <div key={pid} className="space-y-1">
+                    <div className="flex items-center justify-between text-[13px]">
+                      <label className="text-text">{meta.label}</label>
+                      <span className="text-[11px] text-muted/60">
+                        {configured ? '✓ on server' : 'not set'}
+                      </span>
+                    </div>
+                    {meta.key && (
+                      <input
+                        type="password"
+                        value={uiKey || ''}
+                        onChange={(e) => handleKey(pid, e.target.value)}
+                        placeholder={meta.placeholder}
+                        className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors placeholder:text-muted/40"
+                      />
+                    )}
+                    {meta.note && <span className="text-[11px] text-muted">{meta.note}</span>}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         </div>
+
+        {/* Footer */}
         <div className="p-4 border-t border-border flex justify-end gap-2">
           <button onClick={onClose}
             className="px-4 py-1.5 text-[13px] text-muted hover:text-text rounded-lg transition-colors">
-            Cancel
+            Close
           </button>
           <button
-            onClick={save}
+            onClick={saveKeysHandler}
             disabled={saving}
-            className="px-4 py-1.5 text-[13px] font-medium text-[#1a1000] bg-accent rounded-lg hover:brightness-105 disabled:opacity-50 transition-all"
+            className="px-4 py-1.5 text-[13px] font-medium text-black bg-accent rounded-lg hover:brightness-90 disabled:opacity-50 transition-all"
           >
-            {saving ? 'Saved' : 'Save'}
+            {saving ? 'Saved' : 'Save Keys'}
           </button>
         </div>
       </div>
@@ -121,7 +233,4 @@ export function getUIKey(provider) {
     const k = JSON.parse(localStorage.getItem(KEY_STORAGE) || '{}')
     return k[provider] || ''
   } catch { return '' }
-}
-export function getUIKeys() {
-  try { return JSON.parse(localStorage.getItem(KEY_STORAGE) || '{}') } catch { return {} }
 }

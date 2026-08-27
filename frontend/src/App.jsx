@@ -11,24 +11,22 @@ import SettingsModal from './components/SettingsModal.jsx'
 
 export default function App() {
   const [tab, setTab] = useState('chat')
-  // --- conversation state ---
+  // ── conversation state ──
   const [conversations, setConversations] = useState([])
   const [currentId, setCurrentId] = useState(null)
   const [conversationsLoaded, setConversationsLoaded] = useState(false)
 
-  // --- provider / model / mode state ---
+  // ── provider / model / mode state ──
   const [providers, setProviders] = useState({})
-  const [defaultProvider, setDefaultProvider] = useState('ollama')
-  const [provider, setProvider] = useState('ollama')
+  const [defaultProvider, setDefaultProvider] = useState('foundry')
+  const [provider, setProvider] = useState('foundry')
   const [model, setModel] = useState('auto')
   const [agent, setAgent] = useState(false)
   const [reasoningEffort, setReasoning] = useState('')
-
-  // --- ollama state ---
   const [ollama, setOllama] = useState({ loaded: false, model: '' })
   const [ollamaBusy, setOllamaBusy] = useState(false)
 
-  // --- chat state ---
+  // ── chat state ──
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -38,9 +36,8 @@ export default function App() {
   const [health, setHealth] = useState(null)
 
   const scrollRef = useRef(null)
-  const sidebarLoadingRef = useRef({ new: false })
 
-  // --- data loading ---
+  // ── data loading ──
   useEffect(() => { loadModels() }, [])
   useEffect(() => { if (provider === 'ollama') loadOllama() }, [provider])
   useEffect(() => { scrollToBottom() }, [messages, busy])
@@ -55,14 +52,11 @@ export default function App() {
     try {
       const m = await api.models()
       setProviders(m.providers || {})
-      setDefaultProvider(m.default_provider || 'ollama')
-      setProvider((p) => m.providers[p] ? p : (m.default_provider || 'ollama'))
-      // also fetch health for settings display
+      setDefaultProvider(m.default_provider || 'foundry')
+      setProvider((p) => m.providers[p] ? p : (m.default_provider || 'foundry'))
       try { setHealth(await api.health()) } catch {}
-      // once providers are known, load conversations
       loadConversations()
     } catch (e) {
-      // fall back to loading conversations even without provider info
       loadConversations()
     }
   }
@@ -71,11 +65,7 @@ export default function App() {
     setConversationsLoaded(false)
     try {
       const data = await api.conversations()
-      const list = (data.conversations || []).map((c) => ({
-        ...c,
-        preview: '',  // filled lazily / could be from messages
-      }))
-      setConversations(list)
+      setConversations(data.conversations || [])
     } catch (e) {
       console.error('Failed to load conversations', e)
     } finally {
@@ -93,10 +83,9 @@ export default function App() {
   const ollamaLoad = async () => { setOllamaBusy(true); try { await api.ollamaLoad(); await loadOllama() } finally { setOllamaBusy(false) } }
   const ollamaUnload = async () => { setOllamaBusy(true); try { await api.ollamaUnload(); await loadOllama() } finally { setOllamaBusy(false) } }
 
-  // --- conversation actions ---
+  // ── conversation actions ──
   const startNewChat = useCallback(async () => {
     if (busy) return
-    sidebarLoadingRef.current.new = true
     try {
       const conv = await api.newConversation({ provider, model: model || 'auto' })
       setCurrentId(conv.id)
@@ -104,12 +93,9 @@ export default function App() {
       setInput('')
       setErr('')
       setLastMeta(null)
-      // optimistically add to top
       setConversations((cs) => [conv, ...cs])
     } catch (e) {
       setErr(e.message)
-    } finally {
-      sidebarLoadingRef.current.new = false
     }
   }, [busy, provider, model])
 
@@ -122,7 +108,6 @@ export default function App() {
       setMessages(conv.messages || [])
       setErr('')
       setLastMeta(null)
-      // update current provider/model from conversation
       if (conv.provider && providers[conv.provider]) setProvider(conv.provider)
       if (conv.model) setModel(conv.model)
     } catch (e) {
@@ -135,12 +120,7 @@ export default function App() {
   const renameConversation = async (cid, title) => {
     try {
       await api.renameConversation(cid, title)
-      setConversations((cs) =>
-        cs.map((c) => (c.id === cid ? { ...c, title } : c))
-      )
-      if (cid === currentId) {
-        // title shown in App; nothing extra to do here
-      }
+      setConversations((cs) => cs.map((c) => (c.id === cid ? { ...c, title } : c)))
     } catch (e) {
       setErr(e.message)
     }
@@ -161,12 +141,11 @@ export default function App() {
     }
   }
 
-  // --- chat ---
+  // ── chat ──
   const send = async () => {
     const text = input.trim()
     if (!text || busy) return
 
-    // If no conversation is active, create one on-the-fly.
     let cid = currentId
     if (!cid) {
       try {
@@ -204,7 +183,6 @@ export default function App() {
         trace: data.trace,
         usage: data.usage,
       })
-      // update conversation preview
       setConversations((cs) => cs.map((c) =>
         c.id === cid ? { ...c, preview: data.content || '' } : c
       ))
@@ -215,21 +193,19 @@ export default function App() {
     }
   }
 
-  const onKey = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
-  }
-
   const onKeyDownInput = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
-  // --- render ---
-  const providerModels = providers[provider]?.models || []
-  const modelOpts = model === '' ? ['auto'] : [model]
+  // ── provider/model label for header display ──
+  const providerLabel = (providers[provider]?.label || provider) || 'NOVA'
+  const displayModel = model === 'auto' || !model
+    ? (providers[provider]?.default || '')
+    : model
 
   return (
     <div className="flex h-screen bg-bg text-text font-sans overflow-hidden">
-      {/* ─── Sidebar ─── */}
+      {/* ── Sidebar ── */}
       <Sidebar
         conversations={conversations}
         currentId={currentId}
@@ -238,23 +214,24 @@ export default function App() {
         onRename={renameConversation}
         onDelete={deleteConversation}
         onSettings={() => setShowSettings(true)}
-        loading={sidebarLoadingRef.current}
+        loading={{ new: busy }}
       />
 
-      {/* ─── Main ─── */}
+      {/* ── Main ── */}
       <main className="flex-1 flex flex-col overflow-hidden">
         <Header
-          state={{ providers, defaultProvider, provider, model, agent, reasoningEffort, ollama, ollamaBusy }}
-          actions={{ setProvider, setModel, setAgent, setReasoning, ollamaLoad, ollamaUnload }}
+          onSettings={() => setShowSettings(true)}
+          providerLabel={providerLabel}
+          model={displayModel}
         />
 
-        {/* tabs */}
+        {/* Tabs */}
         <div className="flex gap-1 px-4 pt-2 border-b border-border bg-panel">
           {[['chat', 'Chat'], ['analyzer', 'Log Analyzer']].map(([id, label]) => (
             <button
               key={id}
               onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
-              className={`px-4 py-2 text-[13px] font-semibold rounded-t-lg border-b-2 transition-colors
+              className={`px-4 py-1.5 text-[13px] font-medium rounded-t-lg border-b-2 transition-colors
                 ${tab === id ? 'text-accent2 border-accent2' : 'text-muted border-transparent hover:text-text'}`}>
               {label}
             </button>
@@ -273,21 +250,19 @@ export default function App() {
 
         {tab === 'chat' ? (
           <>
-            {/* messages */}
-            <div ref={scrollRef} className="flex-1 overflow-y-auto py-5 space-y-4">
+            {/* Messages */}
+            <div ref={scrollRef} className="flex-1 overflow-y-auto py-5 space-y-3">
               {messages.length === 0 && (
                 <div className="h-full flex items-center justify-center text-center px-6">
-                  <div className="max-w-md space-y-4">
-                    <div className="w-16 h-16 rounded-2xl bg-accent/20 flex items-center justify-center mx-auto">
-                      <span className="text-3xl">✨</span>
+                  <div className="space-y-4 max-w-md">
+                    <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto">
+                      <span className="text-2xl">✨</span>
                     </div>
-                    <h2 className="text-xl font-semibold text-text">NOVA Chat</h2>
+                    <h2 className="text-lg font-medium text-text">NOVA Chat</h2>
                     <p className="text-sm text-muted">
-                      Ask me anything — analyze logs, write code, research threats,
-                      or just chat. Pick your provider up top. Local Ollama is uncensored;
-                      cloud providers are censored fallbacks.
+                      Ask me anything — analyze logs, write code, research threats, or just chat.
                     </p>
-                    <div className="flex flex-wrap gap-1.5 justify-center text-[12px] text-muted">
+                    <div className="flex flex-wrap gap-1.5 justify-center text-[11px] text-muted">
                       <span className="px-2 py-1 bg-panel2 rounded-full">Agent mode</span>
                       <span className="px-2 py-1 bg-panel2 rounded-full">10 providers</span>
                       <span className="px-2 py-1 bg-panel2 rounded-full">History saved</span>
@@ -300,14 +275,14 @@ export default function App() {
               {busy && (
                 <div className="flex justify-start px-3 sm:px-6">
                   <div className="max-w-[820px] w-full flex gap-3">
-                    <div className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold bg-accent2 text-[#04122b]">AI</div>
+                    <div className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold bg-accent2 text-black">AI</div>
                     <div className="rounded-2xl px-4 py-3.5 bg-panel2 border border-border">
-                      <div className="inline-flex items-end gap-1">
+                      <span className="inline-flex items-end gap-1">
                         <span className="text-[10px] uppercase text-muted/60 tracking-wider">thinking</span>
                         <span className="w-1.5 h-1.5 rounded-full bg-accent2 animate-pulse" style={{ animationDelay: '0ms' }} />
                         <span className="w-1.5 h-1.5 rounded-full bg-accent2 animate-pulse" style={{ animationDelay: '200ms' }} />
                         <span className="w-1.5 h-1.5 rounded-full bg-accent2 animate-pulse" style={{ animationDelay: '400ms' }} />
-                      </div>
+                                           </span>
                     </div>
                   </div>
                 </div>
@@ -317,7 +292,7 @@ export default function App() {
               {lastMeta?.trace?.length > 0 && <div className="mx-3 sm:mx-6"><AgentTrace trace={lastMeta.trace} /></div>}
             </div>
 
-            {/* input */}
+            {/* Input */}
             <div className="border-t border-border bg-panel p-4">
               <div className="mx-auto max-w-[820px]">
                 <div className="relative">
@@ -327,12 +302,12 @@ export default function App() {
                     onKeyDown={onKeyDownInput}
                     rows={1}
                     placeholder="Message NOVA…  (Enter to send, Shift+Enter for newline)"
-                    className="w-full resize-none bg-panel2 text-text border border-border rounded-2xl px-4 py-3 text-[14px] outline-none focus:border-accent2 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40"
+                    className="w-full resize-none bg-black text-text border border-border rounded-2xl px-4 py-3 text-[14px] outline-none focus:border-accent2 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40"
                   />
                   <button
                     onClick={send}
                     disabled={busy || !input.trim()}
-                    className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-accent text-[#1a1000] font-semibold text-[13px] disabled:opacity-40 hover:brightness-105 transition-all"
+                    className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-accent text-black font-semibold text-[13px] disabled:opacity-40 hover:brightness-90 transition-all"
                   >
                     {busy ? '…' : 'Send'}
                   </button>
@@ -360,8 +335,26 @@ export default function App() {
         )}
       </main>
 
-      {/* Settings modal */}
-      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} health={health} />
+      {/* Settings Modal */}
+      <SettingsModal
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        providers={providers}
+        defaultProvider={defaultProvider}
+        provider={provider}
+        model={model}
+        setProvider={setProvider}
+        setModel={setModel}
+        agent={agent}
+        setAgent={setAgent}
+        reasoningEffort={reasoningEffort}
+        setReasoning={setReasoning}
+        ollama={ollama}
+        ollamaBusy={ollamaBusy}
+        ollamaLoad={ollamaLoad}
+        ollamaUnload={ollamaUnload}
+        health={health}
+      />
     </div>
   )
 }
