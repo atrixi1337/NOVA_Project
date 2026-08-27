@@ -14,6 +14,8 @@ import json
 import logging
 import os
 import io
+import sqlite3
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -216,6 +218,11 @@ REQUESTY_MODELS = [
 # ---- file analyzer config ----
 ANALYZE_MAX_CHARS = int(os.getenv("NOVA_ANALYZE_MAX_CHARS", "60000"))
 NOVA_MAX_UPLOAD_MB = int(os.getenv("NOVA_MAX_UPLOAD_MB", "10"))
+
+# SQLite database for chat history (file-based, zero-dependency persistence).
+# A persistent volume or bind-mount can hold this file across container restarts.
+HISTORY_DB = os.getenv("NOVA_HISTORY_DB", str(Path(__file__).parent / "nova_history.db"))
+HISTORY_AUTO_TITLE_FROM_FIRST = True  # generate a title from the first user msg
 
 import tempfile
 
@@ -470,6 +477,7 @@ class ChatRequest(BaseModel):
     reasoning_effort: Optional[str] = None  # low/medium/high (reasoning models)
     api_key: Optional[str] = None  # optional override from the UI
     max_tool_rounds: int = Field(default=5, ge=1, le=10)
+    conversation_id: Optional[str] = None  # save messages to this conversation
 
 
 # ----------------------------------------------------------------------------
@@ -799,6 +807,228 @@ def _resolve_model(provider: str, model: str) -> str:
     return model
 
 
+# ----------------------------------------------------------------------------
+# Chat History (SQLite)
+# ----------------------------------------------------------------------------
+def _db() -> sqlite3.Connection:
+    conn = sqlite3.connect(HISTORY_DB)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def init_db() -> None:
+    """Create tables if they don't exist (idempotent)."""
+    conn = _db()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS conversations (
+            id          TEXT PRIMARY KEY,
+            title       TEXT NOT NULL,
+            provider    TEXT NOT NULL,
+            model       TEXT NOT NULL,
+            created_at  REAL NOT NULL,
+            updated_at  REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS messages (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            role            TEXT NOT NULL,            -- user | assistant | system | tool
+            content         TEXT,
+            model           TEXT,
+            provider        TEXT,
+            reasoning       TEXT,
+            usage_json      TEXT,
+            created_at      REAL NOT NULL,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_messages_cid ON messages(conversation_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at DESC);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def _row_to_msg(row: sqlite3.Row) -> Dict[str, Any]:
+    return {
+        "role": row["role"],
+        "content": row["content"] or "",
+        "model": row["model"],
+        "provider": row["provider"],
+        "reasoning": row["reasoning"],
+        "usage": json.loads(row["usage_json"]) if row["usage_json"] else None,
+        "created_at": row["created_at"],
+    }
+
+
+def db_create_conversation(provider: str, model_name: str, title: str = "") -> Dict[str, Any]:
+    now = time.time()
+    cid = f"conv_{uuid.uuid4().hex[:12]}"
+    conn = _db()
+    conn.execute(
+        "INSERT INTO conversations (id, title, provider, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (cid, title or "New conversation", provider, model_name, now, now),
+    )
+    conn.commit()
+    conn.close()
+    return {"id": cid, "title": title or "New conversation", "provider": provider, "model": model_name}
+
+
+def db_list_conversations() -> List[Dict[str, Any]]:
+    conn = _db()
+    rows = conn.execute(
+        """SELECT c.id, c.title, c.provider, c.model, c.created_at, c.updated_at,
+                  (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS msg_count
+           FROM conversations c ORDER BY c.updated_at DESC"""
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "provider": r["provider"],
+            "model": r["model"],
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+            "msg_count": r["msg_count"],
+        }
+        for r in rows
+    ]
+
+
+def db_get_conversation(cid: str) -> Optional[Dict[str, Any]]:
+    conn = _db()
+    conv = conn.execute(
+        "SELECT id, title, provider, model, created_at, updated_at FROM conversations WHERE id = ?",
+        (cid,),
+    ).fetchone()
+    if conv is None:
+        conn.close()
+        return None
+    msgs = conn.execute(
+        "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC", (cid,)
+    ).fetchall()
+    conn.close()
+    return {
+        "id": conv["id"],
+        "title": conv["title"],
+        "provider": conv["provider"],
+        "model": conv["model"],
+        "created_at": conv["created_at"],
+        "updated_at": conv["updated_at"],
+        "messages": [_row_to_msg(m) for m in msgs],
+    }
+
+
+def db_update_conversation_title(cid: str, title: str) -> bool:
+    conn = _db()
+    cur = conn.execute("UPDATE conversations SET title = ? WHERE id = ?", (title, cid))
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def db_delete_conversation(cid: str) -> bool:
+    conn = _db()
+    cur = conn.execute("DELETE FROM conversations WHERE id = ?", (cid,))
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def db_save_message(
+    cid: str, role: str, content: Optional[str], model: Optional[str],
+    provider: Optional[str], reasoning: Optional[str] = None,
+    usage: Optional[Dict] = None,
+) -> None:
+    """Append a message to a conversation; auto-generate a title from the
+    first user message if the conversation still has its default title."""
+    conn = _db()
+    now = time.time()
+    conn.execute(
+        """INSERT INTO messages (conversation_id, role, content, model, provider, reasoning, usage_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (cid, role, content or "", model, provider, reasoning,
+         json.dumps(usage) if usage else None, now),
+    )
+    # Touch the conversation's updated_at.
+    conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
+    # Auto-title: if title is the default, derive from the first non-empty user msg.
+    if role == "user" and HISTORY_AUTO_TITLE_FROM_FIRST:
+        row = conn.execute("SELECT title FROM conversations WHERE id = ?", (cid,)).fetchone()
+        if row and row["title"] == "New conversation" and content:
+            title = content.strip()[:60]
+            if len(content.strip()) > 60:
+                title += "…"
+            conn.execute("UPDATE conversations SET title = ? WHERE id = ?", (title, cid))
+    conn.commit()
+    conn.close()
+
+
+# Initialize tables on import (idempotent, safe for containers).
+init_db()
+
+
+@app.get("/api/conversations")
+async def list_conversations():
+    """Return all conversations (most recent first, with message counts)."""
+    return {"conversations": db_list_conversations()}
+
+
+@app.post("/api/conversations")
+async def new_conversation(req: Optional[Dict[str, Any]] = None):
+    """Create a new conversation. Returns the full conversation object."""
+    body = req or {}
+    provider = body.get("provider") or DEFAULT_PROVIDER
+    model_name = body.get("model") or PROVIDERS.get(provider, {}).get("default_model", DEFAULT_MODEL)
+    title = body.get("title") or ""
+    return db_create_conversation(provider, model_name, title)
+
+
+@app.get("/api/conversations/{cid}")
+async def get_conversation(cid: str):
+    conv = db_get_conversation(cid)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return conv
+
+
+@app.put("/api/conversations/{cid}")
+async def rename_conversation(cid: str, req: Optional[Dict[str, Any]] = None):
+    title = (req or {}).get("title", "")
+    if not title.strip():
+        raise HTTPException(status_code=400, detail="Title cannot be empty.")
+    if not db_update_conversation_title(cid, title.strip()):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {"ok": True}
+
+
+@app.delete("/api/conversations/{cid}")
+async def delete_conversation(cid: str):
+    if not db_delete_conversation(cid):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {"ok": True}
+
+
+@app.post("/api/conversations/{cid}/clear")
+async def clear_conversation_messages(cid: str):
+    """Delete all messages from a conversation (keeps the conversation shell)."""
+    conn = _db()
+    cur = conn.execute(
+        "DELETE FROM messages WHERE conversation_id = ? AND role IN ('user','assistant','tool')",
+        (cid,),
+    )
+    conn.execute(
+        "UPDATE conversations SET title = 'New conversation', updated_at = ? WHERE id = ?",
+        (time.time(), cid),
+    )
+    conn.commit()
+    removed = cur.rowcount
+    conn.close()
+    return {"ok": True, "removed": removed}
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     provider = req.provider if req.provider in PROVIDERS else DEFAULT_PROVIDER
@@ -837,6 +1067,15 @@ async def chat(req: ChatRequest):
     trace: List[Dict[str, Any]] = []
     model = _resolve_model(provider, req.model)
     eff = (req.reasoning_effort or "").strip().lower() or None
+
+    # If saving to history, capture the last user message that triggered this turn.
+    save_history = bool(req.conversation_id)
+    last_user_msg = None
+    if save_history:
+        for m in reversed(req.messages):
+            if m.get("role") == "user":
+                last_user_msg = m
+                break
 
     # Extract any reasoning summary the provider returned (e.g. gpt-5 on Foundry)
     # so the UI can show it in a collapsible box rather than inline.
@@ -899,6 +1138,18 @@ async def chat(req: ChatRequest):
         messages.append(final_msg)
         if "usage" in data:
             trace.append({"type": "usage", "data": data["usage"]})
+        # Persist to chat history if a conversation id was supplied.
+        if save_history and last_user_msg:
+            db_save_message(
+                req.conversation_id, "user",
+                last_user_msg.get("content"),
+                last_user_msg.get("model"), last_user_msg.get("provider"),
+            )
+            db_save_message(
+                req.conversation_id, "assistant",
+                final_msg.get("content", ""), model, provider,
+                grab_reasoning(data), data.get("usage"),
+            )
         return JSONResponse({
             "id": data.get("id"),
             "model": data.get("model", model),
@@ -912,6 +1163,18 @@ async def chat(req: ChatRequest):
     else:
         data = await call_llm(messages, model, api_key, provider, None, eff)
         msg = data["choices"][0]["message"]
+        # Persist to chat history if a conversation id was supplied.
+        if save_history and last_user_msg:
+            db_save_message(
+                req.conversation_id, "user",
+                last_user_msg.get("content"),
+                last_user_msg.get("model"), last_user_msg.get("provider"),
+            )
+            db_save_message(
+                req.conversation_id, "assistant",
+                msg.get("content", ""), model, provider,
+                grab_reasoning(data), data.get("usage"),
+            )
         return JSONResponse({
             "id": data.get("id"),
             "model": data.get("model", model),

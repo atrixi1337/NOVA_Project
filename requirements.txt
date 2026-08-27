@@ -1,3 +1,6 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 httpx==0.28.1
+python-multipart==0.0.9
+# python-evtx is used for parsing Windows .evtx log files (optional but useful)
+python-evtx==0.8.1

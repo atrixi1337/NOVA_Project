@@ -24,13 +24,51 @@ async function jpost(path, body, opts = {}) {
   return r.json()
 }
 
+async function jput(path, body) {
+  const r = await fetch(BASE + path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  })
+  if (!r.ok) {
+    let detail = `PUT ${path} -> ${r.status}`
+    try { const d = await r.json(); detail = d.detail || detail } catch {}
+    throw new Error(detail)
+  }
+  return r.json()
+}
+
+async function jdel(path) {
+  const r = await fetch(BASE + path, { method: 'DELETE' })
+  if (!r.ok) {
+    let detail = `DELETE ${path} -> ${r.status}`
+    try { const d = await r.json(); detail = d.detail || detail } catch {}
+    throw new Error(detail)
+  }
+  return r.json()
+}
+
 export const api = {
+  // models / providers
   models: () => jget('/api/models'),
   health: () => jget('/api/health'),
+
+  // ollama
   ollamaStatus: () => jget('/api/ollama/status'),
   ollamaLoad: () => jpost('/api/ollama/load', {}),
   ollamaUnload: () => jpost('/api/ollama/unload', {}),
+
+  // chat
   chat: (payload) => jpost('/api/chat', payload),
+
+  // conversation history
+  conversations: () => jget('/api/conversations'),
+  newConversation: (body = {}) => jpost('/api/conversations', body),
+  getConversation: (cid) => jget(`/api/conversations/${cid}`),
+  renameConversation: (cid, title) => jput(`/api/conversations/${cid}`, { title }),
+  deleteConversation: (cid) => jdel(`/api/conversations/${cid}`),
+  clearConversation: (cid) => jpost(`/api/conversations/${cid}/clear`, {}),
+
   // multipart analyze
   analyze: async (file, { mode, model, provider, reasoning_effort, api_key }) => {
     const fd = new FormData()

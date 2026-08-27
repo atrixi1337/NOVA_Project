@@ -28,11 +28,12 @@ OpenAI-compatible providers** through one local FastAPI backend:
 > authorised security-research workloads. The cloud routers are useful as a
 > capability fallback when the local 8B is too weak for a task.
 
-It demonstrates:
+It now includes:
 
-* A polished React chat UI (dark, mobile-friendly) with a **Provider + Model** picker
-  so you can switch backends live, markdown + code highlighting, reasoning box, and
-  an agent tool-trace panel.
+* A polished React chat UI (dark theme, mobile-friendly) with a **conversation sidebar**
+  — full chat history persisted in SQLite, with rename, delete, and new-chat flows.
+* A **Provider + Model** picker so you can switch backends live, markdown + code
+  highlighting with copy buttons, a collapsible reasoning box, and an agent tool-trace panel.
 * **Agent mode**: the model can call *safe local tools* — `get_time`, `calculate`,
   and a sandboxed `read_file` — then summarise the results.
 * **Reasoning effort** control (low/medium/high) for reasoning models, with a
@@ -40,6 +41,8 @@ It demonstrates:
 * **File / log analyzer** tab: upload a `.log`/`.txt`/`.csv`/`.json`/`.evtx`, pick
   **Security** or **General** mode, and get a structured report. Windows Event
   Logs (`.evtx`, binary) are auto-converted to text on the server.
+* **Settings modal**: store API keys in your browser's localStorage; they override
+  server-side keys per-request (keys never leave your browser).
 * All API keys stay **server-side only** (never shipped to the browser).
 
 ## Deploy with one command (public Cloudflare link)
@@ -76,6 +79,62 @@ Optional env vars before the command: `NOVA_INSTALL_DIR` (install path,
 default `~/NOVA_Project`), `NOVA_PORT` (app port, default `8000`).
 Add `--no-service` to skip systemd (e.g. for containers/tests) and run the app
 in the foreground instead.
+
+## Deploy to Fly.io (cloud — free, always-on)
+
+Get a public HTTPS URL with zero server management. Fly.io's free tier includes
+1 shared CPU, 256 MB RAM, and a 1 GB persistent volume (perfect for SQLite chat history).
+
+**One-time setup:**
+
+1. Install `flyctl`:
+   ```bash
+   curl -L https://fly.io/install.sh | sh
+   export PATH="$HOME/.fly/bin:$PATH"
+   ```
+
+2. Sign up at [fly.io](https://fly.io), then create a personal access token at
+   [fly.io/user/personal_access_tokens](https://fly.io/user/personal_access_tokens)
+   (scope: Read/Write). Export it:
+   ```bash
+   export FLY_API_TOKEN="<your-token>"
+   ```
+
+3. Create the app + volume (only needed once):
+   ```bash
+   flyctl apps create nova-poc-app --region sin    # or your nearest region
+   flyctl volumes create nova_data --size 1 --region sin -y
+   ```
+
+4. Deploy (the `deploy.sh` helper does everything: build frontend, set secrets, deploy):
+   ```bash
+   cd NOVA_Project
+   bash deploy.sh
+   ```
+
+   Or manually:
+   ```bash
+   cd frontend && npm run build && cd ..
+   flyctl secrets set NOVA_API_KEY="..." FOUNDRIES_API_KEY="..." ...  # from your .env
+   flyctl deploy
+   ```
+
+The app will be live at `https://nova-poc-app.fly.dev/`. The SQLite database
+(`nova_history.db`) lives on the persistent `/data` volume, so chat history
+survives restarts and redeployments.
+
+### Updating an existing deployment
+
+Just re-run `bash deploy.sh`. It rebuilds the frontend, pushes the new image,
+and performs a rolling restart — chat history is preserved.
+
+### Local development (Docker)
+
+```bash
+cd NOVA_Project
+cp .env.example .env     # fill in your keys
+docker compose up -d --build
+```
 
 ## Quick start (Python venv)
 

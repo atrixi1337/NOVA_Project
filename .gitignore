@@ -1,5 +1,8 @@
 # Secrets — never commit the real key
 .env
+# SQLite history database (runtime data, persisted via Docker volume or Fly.io volume)
+nova_history.db*
+nova-test-history.db*
 # Python caches
 __pycache__/
 *.pyc

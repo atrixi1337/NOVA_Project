@@ -12,7 +12,9 @@ function CodeBlock({ html }) {
   }
   return (
     <pre>
-      <button className="copy-btn" onClick={copy}>{copied ? 'copied' : 'copy'}</button>
+      <button className="copy-btn" onClick={copy} title="Copy code">
+        {copied ? '✓ copied' : 'copy'}
+      </button>
       <code ref={ref} dangerouslySetInnerHTML={{ __html: html }} />
     </pre>
   )
@@ -31,9 +33,10 @@ function Markdown({ content }) {
       const btn = document.createElement('button')
       btn.className = 'copy-btn'
       btn.textContent = 'copy'
+      btn.title = 'Copy code'
       btn.onclick = () => {
-        navigator.clipboard?.writeText(pre.innerText.replace(/copy$/, ''))
-        btn.textContent = 'copied'
+        navigator.clipboard?.writeText(pre.innerText.replace(/copy$/i, '').replace(/✓ copied/i, ''))
+        btn.textContent = '✓ copied'
         setTimeout(() => (btn.textContent = 'copy'), 1200)
       }
       pre.appendChild(btn)
@@ -42,18 +45,38 @@ function Markdown({ content }) {
   return <div className="md" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />
 }
 
+// Renders a message content. Handles markdown for assistant messages,
+// plain text for user messages, and thinking state.
 export default function Message({ msg }) {
   const isUser = msg.role === 'user'
+  const hasContent = msg.content && msg.content.trim()
+
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} px-3 sm:px-6`}>
-      <div className={`max-w-[820px] w-full flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
-        <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${isUser ? 'bg-accent text-[#1a1000]' : 'bg-accent2 text-[#04122b]'}`}>
+      <div
+        className={`max-w-[820px] w-full flex gap-3 items-start ${
+          isUser ? 'flex-row-reverse' : ''
+        }`}
+      >
+        <div
+          className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold flex-shrink-0 ${
+            isUser
+              ? 'bg-accent text-[#1a1000]'
+              : 'bg-accent2 text-[#04122b]'
+          }`}
+        >
           {isUser ? 'You' : 'AI'}
         </div>
-        <div className={`rounded-2xl px-4 py-3 text-[15px] leading-relaxed ${isUser ? 'bg-user border border-border' : 'bg-panel2 border border-border'}`}>
+        <div
+          className={`rounded-2xl px-4 py-3 text-[15px] leading-relaxed ${
+            isUser
+              ? 'bg-accent/10 border border-accent/20'
+              : 'bg-panel2 border border-border'
+          }`}
+        >
           {isUser ? (
             <div className="whitespace-pre-wrap">{msg.content}</div>
-          ) : msg.content ? (
+          ) : hasContent ? (
             <Markdown content={msg.content} />
           ) : (
             <div className="text-muted italic">…thinking</div>
