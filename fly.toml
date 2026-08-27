@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for nova-poc-app-drifting-fern-7317 on 2026-08-27T20:44:06+08:00
+# fly.toml app configuration file generated for sallaapam on 2026-08-27T20:55:59+08:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'nova-poc-app-drifting-fern-7317'
+app = 'sallaapam'
 primary_region = 'sin'
 
 [experimental]
