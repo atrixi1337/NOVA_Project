@@ -9,6 +9,18 @@ import ReasoningBox from './components/ReasoningBox.jsx'
 import Analyzer from './components/Analyzer.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 
+// Malayalam mode: route chats through the Gemini provider (multilingual, strong
+// Malayalam) and prepend a system instruction so the model replies only in
+// Malayalam — either Malayalam script (e.g. "സുഖമാണോ") or Manglish / Latin-script
+// Malayalam (e.g. "sugamano"). The backend forwards system messages verbatim.
+const MALAYALAM_SYSTEM_PROMPT =
+  'You are NOVA, a helpful AI assistant. The user has enabled Malayalam mode. ' +
+  'Reply ONLY in Malayalam — either in Malayalam script (e.g. "സുഖമാണോ") or in ' +
+  'Manglish / Latin-script Malayalam (e.g. "sugamano"), matching the script the ' +
+  'user wrote with. Never answer in English prose. Keep responses friendly and ' +
+  'conversational. You run inside a local proof-of-concept chatbot on the user\'s ' +
+  'lab machine.'
+
 export default function App() {
   const [tab, setTab] = useState('chat')
   // ── conversation state ──
@@ -33,6 +45,10 @@ export default function App() {
   const [err, setErr] = useState('')
   const [lastMeta, setLastMeta] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [malayalamMode, setMalayalamMode] = useState(() => {
+    try { return localStorage.getItem('nova_malayalam_mode') === 'true' } catch { return false }
+  })
   const [health, setHealth] = useState(null)
 
   const scrollRef = useRef(null)
@@ -41,6 +57,11 @@ export default function App() {
   useEffect(() => { loadModels() }, [])
   useEffect(() => { if (provider === 'ollama') loadOllama() }, [provider])
   useEffect(() => { scrollToBottom() }, [messages, busy])
+
+  // Persist Malayalam-mode preference across reloads.
+  useEffect(() => {
+    try { localStorage.setItem('nova_malayalam_mode', String(malayalamMode)) } catch {}
+  }, [malayalamMode])
 
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
@@ -87,7 +108,7 @@ export default function App() {
   const startNewChat = useCallback(async () => {
     if (busy) return
     try {
-      const conv = await api.newConversation({ provider, model: model || 'auto' })
+      const conv = await api.newConversation({ provider: activeProvider, model: activeModel || 'auto' })
       setCurrentId(conv.id)
       setMessages([])
       setInput('')
@@ -97,7 +118,7 @@ export default function App() {
     } catch (e) {
       setErr(e.message)
     }
-  }, [busy, provider, model])
+  }, [busy, provider, model, malayalamMode])
 
   const openConversation = useCallback(async (cid) => {
     if (busy) return
@@ -149,7 +170,7 @@ export default function App() {
     let cid = currentId
     if (!cid) {
       try {
-        const conv = await api.newConversation({ provider, model: model || 'auto' })
+        const conv = await api.newConversation({ provider: activeProvider, model: activeModel || 'auto' })
         cid = conv.id
         setCurrentId(cid)
         setConversations((cs) => [conv, ...cs])
@@ -165,15 +186,21 @@ export default function App() {
     setInput('')
     setBusy(true)
     setLastMeta(null)
+    // In Malayalam mode, route the chat through the Gemini provider and prepend a
+    // language instruction. The backend forwards system messages verbatim and
+    // skips its own system prompt when one is already present.
+    const sendMessages = malayalamMode
+      ? [{ role: 'system', content: MALAYALAM_SYSTEM_PROMPT }, ...next]
+      : next
     try {
       const data = await api.chat({
-        messages: next,
-        model,
+        messages: sendMessages,
+        model: activeModel,
         agent,
-        provider,
+        provider: activeProvider,
         reasoning_effort: reasoningEffort || undefined,
         conversation_id: cid,
-        api_key: getUIKey(provider) || undefined,
+        api_key: getUIKey(activeProvider) || undefined,
       })
       setMessages([...next, { role: 'assistant', content: data.content }])
       setLastMeta({
@@ -198,14 +225,26 @@ export default function App() {
   }
 
   // ── provider/model label for header display ──
-  const providerLabel = (providers[provider]?.label || provider) || 'NOVA'
-  const displayModel = model === 'auto' || !model
-    ? (providers[provider]?.default || '')
-    : model
+  // In Malayalam mode the chat is routed through the Gemini provider (multilingual,
+  // strong Malayalam), so the header reflects that effective provider/model.
+  const activeProvider = malayalamMode ? 'gemini' : provider
+  const activeModel = malayalamMode ? 'auto' : model
+  const providerLabel = (providers[activeProvider]?.label || activeProvider) || 'NOVA'
+  const displayModel = activeModel === 'auto' || !activeModel
+    ? (providers[activeProvider]?.default || '')
+    : activeModel
 
   return (
     <div className="flex h-screen bg-bg text-text font-sans overflow-hidden">
-      {/* ── Sidebar ── */}
+      {/* Mobile drawer backdrop (visible only on small screens when sidebar is open) */}
+      <div
+        className={`fixed inset-0 z-30 bg-black/60 backdrop-blur-sm md:hidden transition-opacity duration-200 ease-in-out ${
+          sidebarOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        }`}
+        onClick={() => setSidebarOpen(false)}
+      />
+
+      {/* Sidebar: inline on desktop, off-canvas drawer on mobile */}
       <Sidebar
         conversations={conversations}
         currentId={currentId}
@@ -215,12 +254,15 @@ export default function App() {
         onDelete={deleteConversation}
         onSettings={() => setShowSettings(true)}
         loading={{ new: busy }}
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
       />
 
       {/* ── Main ── */}
       <main className="flex-1 flex flex-col overflow-hidden">
         <Header
           onSettings={() => setShowSettings(true)}
+          onMenu={() => setSidebarOpen(true)}
           providerLabel={providerLabel}
           model={displayModel}
         />
@@ -341,8 +383,8 @@ export default function App() {
         onClose={() => setShowSettings(false)}
         providers={providers}
         defaultProvider={defaultProvider}
-        provider={provider}
-        model={model}
+        provider={activeProvider}
+        model={activeModel}
         setProvider={setProvider}
         setModel={setModel}
         agent={agent}
@@ -354,6 +396,8 @@ export default function App() {
         ollamaLoad={ollamaLoad}
         ollamaUnload={ollamaUnload}
         health={health}
+        malayalamMode={malayalamMode}
+        setMalayalamMode={setMalayalamMode}
       />
     </div>
   )

@@ -30,6 +30,8 @@ export default function Sidebar({
   onDelete,
   onSettings,
   loading,
+  open = false,
+  onClose,
 }) {
   const [hovered, setHovered] = useState(null)
   const [renaming, setRenaming] = useState(null)
@@ -59,7 +61,7 @@ export default function Sidebar({
   const sorted = [...conversations].sort((a, b) => b.updated_at - a.updated_at)
 
   return (
-    <aside className="sidebar flex flex-col w-64 min-w-[240px] max-w-80 border-r border-border bg-sidebar overflow-hidden">
+    <aside className={`fixed inset-y-0 left-0 z-40 flex flex-col w-64 min-w-[240px] max-w-80 border-r border-border bg-sidebar overflow-hidden -translate-x-full md:static md:translate-x-0 transition-transform duration-200 ease-in-out ${open ? 'translate-x-0' : '-translate-x-full'}`}>
       {/* top: brand + new chat */}
       <div className="p-3 border-b border-border">
         <div className="flex items-center justify-between px-1 py-1">
@@ -68,7 +70,7 @@ export default function Sidebar({
             <span className="font-semibold text-[16px] text-text">NOVA Chat</span>
           </div>
           <button
-            onClick={onSettings}
+            onClick={() => { onSettings(); onClose?.() }}
             className="p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors"
             title="Settings"
           >
@@ -79,7 +81,7 @@ export default function Sidebar({
           </button>
         </div>
         <button
-          onClick={onNew}
+          onClick={() => { onNew(); onClose?.() }}
           disabled={loading.new}
           className="mt-1 w-full flex items-center justify-center gap-2 px-3 py-2 text-[13px] font-medium text-[#1a1000] bg-accent rounded-xl hover:brightness-105 disabled:opacity-50 transition-all"
         >
@@ -119,7 +121,7 @@ export default function Sidebar({
                   onMouseLeave={() => setHovered(null)}
                 >
                   <button
-                    onClick={() => !isRenaming && onSelect(c.id)}
+                    onClick={() => { if (!isRenaming) { onSelect(c.id); onClose?.() } }}
                     className="w-full text-left p-3 rounded-xl focus:outline-none"
                   >
                     {isRenaming ? (
@@ -187,7 +189,7 @@ export default function Sidebar({
       {/* bottom */}
       <div className="p-2 border-t border-border">
         <button
-          onClick={onSettings}
+          onClick={() => { onSettings(); onClose?.() }}
           className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-muted hover:text-text hover:bg-panel2 rounded-xl transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

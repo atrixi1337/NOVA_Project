@@ -32,6 +32,8 @@ export default function SettingsModal({
   agent, reasoningEffort,
   ollama, ollamaBusy, ollamaLoad, ollamaUnload,
   health,
+  malayalamMode = false,
+  setMalayalamMode,
 }) {
   const [keys, setKeys] = useState({})
   const [saving, setSaving] = useState(false)
@@ -88,19 +90,24 @@ export default function SettingsModal({
               <select
                 value={provider}
                 onChange={(e) => setProvider(e.target.value)}
-                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors"
+                disabled={malayalamMode}
+                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors disabled:opacity-60"
               >
                 {provOpts.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
+              {malayalamMode && (
+                <p className="text-[11px] text-muted/60 mt-1">Locked to Gemini in Malayalam mode.</p>
+              )}
             </div>
             <div>
               <label className="block text-[12px] text-muted mb-1">Model</label>
               <select
                 value={model || 'auto'}
                 onChange={(e) => setModel(e.target.value)}
-                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors"
+                disabled={malayalamMode}
+                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors disabled:opacity-60"
               >
                 {modelOpts.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
@@ -148,6 +155,29 @@ export default function SettingsModal({
                 </select>
               </div>
             </div>
+          </div>
+
+          {/* ── Language Mode (Malayalam) ── */}
+          <div className="space-y-3">
+            <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">Language Mode</h4>
+            <div className="flex items-center justify-between">
+              <span className="text-[13px] text-text">Malayalam mode (Gemini)</span>
+              <label className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors">
+                <input
+                  type="checkbox"
+                  checked={!!malayalamMode}
+                  onChange={(e) => setMalayalamMode(e.target.checked)}
+                  className="sr-only"
+                />
+                <span className={`inline-block h-5 w-9 rounded-full transition-colors ${malayalamMode ? 'bg-accent2' : 'bg-border'}`}>
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-panel2 transition-transform ${malayalamMode ? 'translate-x-5' : 'translate-x-1'}`} />
+                </span>
+              </label>
+            </div>
+            <p className="text-[11px] text-muted/60">
+              Routes chats through Gemini and prompts it to reply only in Malayalam
+              (script or Manglish, e.g. "sugamano").
+            </p>
           </div>
 
           {/* ── Ollama ── */}
