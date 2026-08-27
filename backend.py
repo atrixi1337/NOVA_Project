@@ -179,6 +179,20 @@ MISTRAL_MODELS = [
     ).split(",") if m.strip()
 ]
 
+# ---- provider: GMI Cloud (OpenAI-compatible GPU cloud; MiniMax etc.) ----
+# GMI Cloud serves an OpenAI-compatible endpoint at https://api.gmi-serving.com/v1.
+# Auth is the standard Authorization: Bearer header (handled in nova_headers).
+GMI_BASE_URL = os.getenv("GMI_BASE_URL", "https://api.gmi-serving.com/v1")
+GMI_API_KEY = os.getenv("GMI_API_KEY", "")
+GMI_DEFAULT_MODEL = os.getenv("GMI_MODEL", "MiniMaxAI/MiniMax-M3")
+# Models offered for the GMI Cloud provider in the UI picker.
+GMI_MODELS = [
+    m.strip() for m in os.getenv(
+        "GMI_MODELS",
+        "MiniMaxAI/MiniMax-M3,MiniMaxAI/MiniMax-M2.7,MiniMaxAI/MiniMax-M2.5,MiniMaxAI/MiniMax-M2.1",
+    ).split(",") if m.strip()
+]
+
 # ---- provider: Cloudflare Workers AI (OpenAI-compatible; free 10k neurons/day) ----
 # Censored (cloud). Needs CLOUDFLARE_ACCOUNT_ID (in the base URL) + an API token
 # with Workers AI permission. Free tier = 10,000 Neurons/day (resets 00:00 UTC).
@@ -325,6 +339,7 @@ PROVIDERS = {
     "requesty": {"label": "Requesty (free, cloud)", "base_url": REQUESTY_BASE_URL, "default_model": REQUESTY_DEFAULT_MODEL, "models": REQUESTY_MODELS, "cloud": True},
     "cloudflare": {"label": "Cloudflare Workers AI (free, cloud)", "base_url": CLOUDFLARE_BASE_URL, "default_model": CLOUDFLARE_DEFAULT_MODEL, "models": CLOUDFLARE_MODELS, "cloud": True},
     "mistral": {"label": "Mistral AI (free tier, cloud)", "base_url": MISTRAL_BASE_URL, "default_model": MISTRAL_DEFAULT_MODEL, "models": MISTRAL_MODELS, "cloud": True},
+    "gmi": {"label": "GMI Cloud (MiniMax)", "base_url": GMI_BASE_URL, "default_model": GMI_DEFAULT_MODEL, "models": GMI_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -571,21 +586,25 @@ async def call_llm(
 
             # Surface auth / quota / bad-request errors with a clean message.
             if resp.status_code in (401, 403, 429):
-                # 429 (rate limit) from Gemini: the primary key is throttled, so
-                # transparently retry the request once with the backup key. This
-                # keeps Malayalam-mode traffic alive while the primary key's
-                # quota resets. (401/403 and any 4xx on non-Gemini providers are
-                # hard failures and surface immediately.)
-                if resp.status_code == 429 and provider == "gemini":
-                    backup_key = next((k for k in GEMINI_API_KEYS[1:] if k), None)
-                    if backup_key:
+                # For Gemini, a 4xx here almost always means the KEY/PROJECT is
+                # the problem — a throttle (429), a Google-blocked project (403
+                # "permission denied"), or an unauthorized key (401) — NOT the
+                # request itself. If a backup key is configured, transparently
+                # retry the call with each alternate key so Malayalam traffic
+                # keeps flowing; only surface the error once every key is tried.
+                # Other providers (single key) surface 4xx auth/rejection
+                # errors immediately.
+                if provider == "gemini" and len(GEMINI_API_KEYS) > 1:
+                    attempts: List[str] = []
+                    for bk in GEMINI_API_KEYS[1:]:
                         logger.warning(
-                            "gemini rate limit (429) on primary key — "
-                            "retrying with backup key"
+                            "gemini key rejected (%s) — retrying with an "
+                            "alternate key (status codes only; no keys logged)",
+                            resp.status_code,
                         )
                         resp_b = await client.post(
                             f"{base_url}/chat/completions",
-                            headers=nova_headers(backup_key, provider),
+                            headers=nova_headers(bk, provider),
                             json=payload,
                         )
                         if resp_b.status_code == 200 and resp_b.text.lstrip().startswith("{"):
@@ -595,8 +614,14 @@ async def call_llm(
                                 parsed_b = None
                             if isinstance(parsed_b, dict) and "choices" in parsed_b:
                                 return parsed_b
-                        # Backup also failed / rate-limited: fall through and
-                        # surface the original primary-key 429 to the caller.
+                        attempts.append(f"{resp.status_code}->{resp_b.status_code}")
+                    # Every configured key was rejected: surface a concise,
+                    # key-safe summary (only status-code transitions, never keys).
+                    detail = (
+                        _clean_error(resp, provider)
+                        + f" Backup key(s) also rejected ({' | '.join(attempts) or 'n/a'})."
+                    )
+                    raise HTTPException(status_code=resp.status_code, detail=detail)
                 detail = _clean_error(resp, provider)
                 raise HTTPException(status_code=resp.status_code, detail=detail)
             if resp.status_code >= 500:
