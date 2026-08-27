@@ -66,6 +66,13 @@ GEMINI_BASE_URL = os.getenv(
     "https://generativelanguage.googleapis.com/v1beta/openai",
 )
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Optional secondary Gemini key — used as a fallback when the primary returns
+# 429 (rate-limited), so Malayalam traffic keeps working while the primary
+# quota resets. Set via env: GEMINI_API_KEY_BACKUP=<second_key>.
+GEMINI_API_KEY_BACKUP = os.getenv("GEMINI_API_KEY_BACKUP", "")
+# Ordered candidate keys for Gemini (primary first, backup after). Used by
+# call_llm to transparently fail over to the backup on a 429 from the primary.
+GEMINI_API_KEYS = [k for k in (GEMINI_API_KEY, GEMINI_API_KEY_BACKUP) if k]
 GEMINI_DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 # Models offered for the Gemini provider in the UI picker (current/valid IDs).
 GEMINI_MODELS = [
@@ -564,6 +571,32 @@ async def call_llm(
 
             # Surface auth / quota / bad-request errors with a clean message.
             if resp.status_code in (401, 403, 429):
+                # 429 (rate limit) from Gemini: the primary key is throttled, so
+                # transparently retry the request once with the backup key. This
+                # keeps Malayalam-mode traffic alive while the primary key's
+                # quota resets. (401/403 and any 4xx on non-Gemini providers are
+                # hard failures and surface immediately.)
+                if resp.status_code == 429 and provider == "gemini":
+                    backup_key = next((k for k in GEMINI_API_KEYS[1:] if k), None)
+                    if backup_key:
+                        logger.warning(
+                            "gemini rate limit (429) on primary key — "
+                            "retrying with backup key"
+                        )
+                        resp_b = await client.post(
+                            f"{base_url}/chat/completions",
+                            headers=nova_headers(backup_key, provider),
+                            json=payload,
+                        )
+                        if resp_b.status_code == 200 and resp_b.text.lstrip().startswith("{"):
+                            try:
+                                parsed_b = resp_b.json()
+                            except json.JSONDecodeError:
+                                parsed_b = None
+                            if isinstance(parsed_b, dict) and "choices" in parsed_b:
+                                return parsed_b
+                        # Backup also failed / rate-limited: fall through and
+                        # surface the original primary-key 429 to the caller.
                 detail = _clean_error(resp, provider)
                 raise HTTPException(status_code=resp.status_code, detail=detail)
             if resp.status_code >= 500:
@@ -732,6 +765,9 @@ async def health():
             for pid, p in PROVIDERS.items()
         },
         "sandbox_root": str(SANDBOX_ROOT),
+        # Gemini backup-key status (supports the rate-limit failover in call_llm).
+        "gemini_keys": len(GEMINI_API_KEYS),
+        "gemini_backup_configured": bool(GEMINI_API_KEY_BACKUP),
     }
 
 
@@ -779,7 +815,10 @@ def _provider_key(provider: str) -> str:
     if provider == "foundry":
         return FOUNDRY_API_KEY
     if provider == "gemini":
-        return GEMINI_API_KEY
+        # Primary key first; fall back to the secondary key if the primary
+        # isn't set (keeps /api/health and the Malayalam toggle working even
+        # when only a backup key is configured).
+        return GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
     if provider == "cohere":
         return COHERE_API_KEY
     if provider == "ollama":
