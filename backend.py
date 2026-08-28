@@ -207,6 +207,19 @@ INCEPTION_MODELS = [
     if m.strip()
 ]
 
+# ---- provider: Upstage AI (OpenAI-compatible; solar-pro4, reasoning-capable) ----
+# https://docs.upstage.ai/guide/api-workspace/api-reference  Bearer auth; shares the
+# /chat/completions path. solar-pro4 supports extended reasoning (reasoning_effort).
+UPSTAGE_BASE_URL = os.getenv("UPSTAGE_BASE_URL", "https://api.upstage.ai/v1")
+UPSTAGE_API_KEY = os.getenv("UPSTAGE_API_KEY", "")
+UPSTAGE_DEFAULT_MODEL = os.getenv("UPSTAGE_MODEL", "solar-pro4")
+# Models offered for the Upstage provider in the UI picker.
+UPSTAGE_MODELS = [
+    m.strip()
+    for m in os.getenv("UPSTAGE_MODELS", "solar-pro4").split(",")
+    if m.strip()
+]
+
 # ---- provider: Cloudflare Workers AI (OpenAI-compatible; free 10k neurons/day) ----
 # Censored (cloud). Needs CLOUDFLARE_ACCOUNT_ID (in the base URL) + an API token
 # with Workers AI permission. Free tier = 10,000 Neurons/day (resets 00:00 UTC).
@@ -355,6 +368,7 @@ PROVIDERS = {
     "mistral": {"label": "Mistral AI (free tier, cloud)", "base_url": MISTRAL_BASE_URL, "default_model": MISTRAL_DEFAULT_MODEL, "models": MISTRAL_MODELS, "cloud": True},
     "gmi": {"label": "GMI Cloud (MiniMax)", "base_url": GMI_BASE_URL, "default_model": GMI_DEFAULT_MODEL, "models": GMI_MODELS, "cloud": True},
     "inception": {"label": "Inception Labs", "base_url": INCEPTION_BASE_URL, "default_model": INCEPTION_DEFAULT_MODEL, "models": INCEPTION_MODELS, "cloud": True},
+    "upstage": {"label": "Upstage AI", "base_url": UPSTAGE_BASE_URL, "default_model": UPSTAGE_DEFAULT_MODEL, "models": UPSTAGE_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -578,7 +592,7 @@ async def call_llm(
         payload["tool_choice"] = "auto"
     # Reasoning effort only makes sense for reasoning-capable models; send it
     # for Foundry gpt-5 family (others ignore/accept the field harmlessly).
-    if reasoning_effort and provider == "foundry" and "gpt-5" in model:
+    if reasoning_effort and ((provider == "foundry" and "gpt-5" in model) or provider == "upstage"):
         payload["reasoning_effort"] = reasoning_effort
 
     last_err: Optional[str] = None
@@ -876,6 +890,8 @@ def _provider_key(provider: str) -> str:
         return MISTRAL_API_KEY
     if provider == "inception":
         return INCEPTION_API_KEY
+    if provider == "upstage":
+        return UPSTAGE_API_KEY
     return NOVA_API_KEY
 
 
