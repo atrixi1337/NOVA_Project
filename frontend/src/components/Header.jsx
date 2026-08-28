@@ -19,9 +19,10 @@ export default function Header({ onSettings, onMenu, providerLabel, model }) {
             </svg>
           </button>
         )}
-        <span className="font-semibold text-[15px] text-text">
-          <span className="text-accent">NOVA</span> Chat
-        </span>
+        <div className="flex items-center gap-2">
+          <img src="/logo.png" alt="Sallaapam" className="h-6 w-auto object-contain" />
+          <span className="font-semibold text-[15px] text-accent">Sallaapam</span>
+        </div>
       </div>
       <div className="flex items-center gap-3">
         {providerLabel && (

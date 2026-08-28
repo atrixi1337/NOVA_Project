@@ -1,5 +1,5 @@
 """
-nova-poc backend
+Sallaapam backend
 ================
 A tiny FastAPI service that:
   1. Proxies chat requests to Amazon Nova's OpenAI-compatible endpoint.
@@ -7,7 +7,7 @@ A tiny FastAPI service that:
      tools (get_time, calculate, read_file) and the results are fed back.
 
 This is a PROOF OF CONCEPT built for a local lab. It intentionally keeps the
-Nova API key server-side only (never shipped to the browser).
+API key server-side only (never shipped to the browser).
 """
 
 import json

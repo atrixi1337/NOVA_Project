@@ -66,8 +66,8 @@ export default function Sidebar({
       <div className="p-3 border-b border-border">
         <div className="flex items-center justify-between px-1 py-1">
           <div className="flex items-center gap-2.5">
-            <span className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-extrabold bg-accent text-[#1a1000]">N</span>
-            <span className="font-semibold text-[16px] text-text">NOVA Chat</span>
+            <img src="/logo.png" alt="Sallaapam" className="w-7 h-7 object-contain" />
+            <span className="font-semibold text-[16px] text-text">Sallaapam Chat</span>
           </div>
           <button
             onClick={() => { onSettings(); onClose?.() }}

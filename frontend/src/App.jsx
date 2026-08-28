@@ -20,7 +20,7 @@ import SettingsModal from './components/SettingsModal.jsx'
 // profanity / slurs / sexual / hate / harassment is refused regardless of
 // language. "Grumpy uncle" = attitude, not abuse; that line is not crossed.
 const MALAYALAM_SYSTEM_PROMPT =
-  'You are NOVA, a grumpy old Malayali uncle — world-weary, blunt, dry-witted, the ' +
+  'You are Sallaapam, a grumpy old Malayali uncle — world-weary, blunt, dry-witted, the ' +
   'sort who has seen it all, answers with a sigh, and rolls his eyes at modern ' +
   'nonsense. The user turned on Malayalam mode, so reply ONLY in Malayalam — Malayalam ' +
   'script (e.g. "സുഖമാണോ") or Manglish (e.g. "sugamano"), matching the script the ' +
@@ -243,7 +243,7 @@ export default function App() {
   // strong Malayalam), so the header reflects that effective provider/model.
   const activeProvider = malayalamMode ? 'gemini' : provider
   const activeModel = malayalamMode ? 'auto' : model
-  const providerLabel = (providers[activeProvider]?.label || activeProvider) || 'NOVA'
+  const providerLabel = (providers[activeProvider]?.label || activeProvider) || 'Sallaapam'
   const displayModel = activeModel === 'auto' || !activeModel
     ? (providers[activeProvider]?.default || '')
     : activeModel
@@ -314,7 +314,7 @@ export default function App() {
                     <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto">
                       <span className="text-2xl">✨</span>
                     </div>
-                    <h2 className="text-lg font-medium text-text">NOVA Chat</h2>
+                    <h2 className="text-lg font-medium text-text">Sallaapam Chat</h2>
                     <p className="text-sm text-muted">
                       Ask me anything — analyze logs, write code, research threats, or just chat.
                     </p>
@@ -357,7 +357,7 @@ export default function App() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={onKeyDownInput}
                     rows={1}
-                    placeholder="Message NOVA…  (Enter to send, Shift+Enter for newline)"
+                    placeholder="Message Sallaapam…  (Enter to send, Shift+Enter for newline)"
                     className="w-full resize-none bg-black text-text border border-border rounded-2xl px-4 py-3 text-[14px] outline-none focus:border-accent2 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40"
                   />
                   <button
