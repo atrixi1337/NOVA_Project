@@ -15,6 +15,7 @@ const PROVIDER_META = {
   requesty:    { label: 'Requesty',             key: 'REQUESTY_API_KEY',      placeholder: 'rqsty-sk-…' },
   cloudflare:  { label: 'Cloudflare Workers AI', key: 'CLOUDFLARE_API_TOKEN', placeholder: 'Cloudflare API token' },
   mistral:     { label: 'Mistral AI',           key: 'MISTRAL_API_KEY',       placeholder: 'Mistral API key' },
+  inception:   { label: 'Inception Labs', key: 'INCEPTION_API_KEY', placeholder: 'Inception API key' },
 }
 
 function loadKeys() {

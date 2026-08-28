@@ -320,7 +320,7 @@ export default function App() {
                     </p>
                     <div className="flex flex-wrap gap-1.5 justify-center text-[11px] text-muted">
                       <span className="px-2 py-1 bg-panel2 rounded-full">Agent mode</span>
-                      <span className="px-2 py-1 bg-panel2 rounded-full">10 providers</span>
+                      <span className="px-2 py-1 bg-panel2 rounded-full">{Object.keys(providers).length} providers</span>
                       <span className="px-2 py-1 bg-panel2 rounded-full">History saved</span>
                     </div>
                   </div>

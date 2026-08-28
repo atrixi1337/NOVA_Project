@@ -193,6 +193,20 @@ GMI_MODELS = [
     ).split(",") if m.strip()
 ]
 
+# ---- provider: Inception Labs (OpenAI-compatible; mercury family of models) ----
+# https://docs.inceptionlabs.ai  Auth is the standard Authorization: Bearer header
+# (handled in nova_headers); it shares the /chat/completions path with the other
+# OpenAI-compatible providers. mercury-2 is their flagship model.
+INCEPTION_BASE_URL = os.getenv("INCEPTION_BASE_URL", "https://api.inceptionlabs.ai/v1")
+INCEPTION_API_KEY = os.getenv("INCEPTION_API_KEY", "")
+INCEPTION_DEFAULT_MODEL = os.getenv("INCEPTION_MODEL", "mercury-2")
+# Models offered for the Inception provider in the UI picker.
+INCEPTION_MODELS = [
+    m.strip()
+    for m in os.getenv("INCEPTION_MODELS", "mercury-2").split(",")
+    if m.strip()
+]
+
 # ---- provider: Cloudflare Workers AI (OpenAI-compatible; free 10k neurons/day) ----
 # Censored (cloud). Needs CLOUDFLARE_ACCOUNT_ID (in the base URL) + an API token
 # with Workers AI permission. Free tier = 10,000 Neurons/day (resets 00:00 UTC).
@@ -340,6 +354,7 @@ PROVIDERS = {
     "cloudflare": {"label": "Cloudflare Workers AI (free, cloud)", "base_url": CLOUDFLARE_BASE_URL, "default_model": CLOUDFLARE_DEFAULT_MODEL, "models": CLOUDFLARE_MODELS, "cloud": True},
     "mistral": {"label": "Mistral AI (free tier, cloud)", "base_url": MISTRAL_BASE_URL, "default_model": MISTRAL_DEFAULT_MODEL, "models": MISTRAL_MODELS, "cloud": True},
     "gmi": {"label": "GMI Cloud (MiniMax)", "base_url": GMI_BASE_URL, "default_model": GMI_DEFAULT_MODEL, "models": GMI_MODELS, "cloud": True},
+    "inception": {"label": "Inception Labs", "base_url": INCEPTION_BASE_URL, "default_model": INCEPTION_DEFAULT_MODEL, "models": INCEPTION_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -859,6 +874,8 @@ def _provider_key(provider: str) -> str:
         return CLOUDFLARE_API_TOKEN
     if provider == "mistral":
         return MISTRAL_API_KEY
+    if provider == "inception":
+        return INCEPTION_API_KEY
     return NOVA_API_KEY
 
 
