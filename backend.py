@@ -220,6 +220,27 @@ UPSTAGE_MODELS = [
     if m.strip()
 ]
 
+# ---- provider: Reka AI (OpenAI-compatible) ----
+# https://api.reka.ai  Auth uses the X-Api-Key header (handled in nova_headers);
+# shares the /chat/completions path. NOTE: Reka renamed their models — the old
+# "reka-flash"/"reka-core" ids are gone (404). Current catalog (GET /v1/models):
+#   reka-edge-2603                            (Reka's own)
+#   deepseek4-flash, glm5.3-flash, glm5.2, qwen3.8-flash, qwen3.8-27b  (Reka-hosted passthroughs)
+# reka-flash-3 is a heavy reasoning model (>60s to reply), so the fast
+# deepseek4-flash (a Reka-hosted DeepSeek V4) is the default. reka-flash-3 still
+# gets a longer reply timeout in call_llm() so it doesn't 502.
+REKA_BASE_URL = os.getenv("REKA_BASE_URL", "https://api.reka.ai/v1")
+REKA_API_KEY = os.getenv("REKA_API_KEY", "")
+REKA_DEFAULT_MODEL = os.getenv("REKA_MODEL", "deepseek4-flash")
+REKA_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "REKA_MODELS",
+        "reka-edge-2603,deepseek4-flash,glm5.3-flash,glm5.2,qwen3.8-flash,qwen3.8-27b",
+    ).split(",")
+    if m.strip()
+]
+
 # ---- provider: Cloudflare Workers AI (OpenAI-compatible; free 10k neurons/day) ----
 # Censored (cloud). Needs CLOUDFLARE_ACCOUNT_ID (in the base URL) + an API token
 # with Workers AI permission. Free tier = 10,000 Neurons/day (resets 00:00 UTC).
@@ -369,6 +390,7 @@ PROVIDERS = {
     "gmi": {"label": "GMI Cloud (MiniMax)", "base_url": GMI_BASE_URL, "default_model": GMI_DEFAULT_MODEL, "models": GMI_MODELS, "cloud": True},
     "inception": {"label": "Inception Labs", "base_url": INCEPTION_BASE_URL, "default_model": INCEPTION_DEFAULT_MODEL, "models": INCEPTION_MODELS, "cloud": True},
     "upstage": {"label": "Upstage AI", "base_url": UPSTAGE_BASE_URL, "default_model": UPSTAGE_DEFAULT_MODEL, "models": UPSTAGE_MODELS, "cloud": True},
+    "reka": {"label": "Reka AI", "base_url": REKA_BASE_URL, "default_model": REKA_DEFAULT_MODEL, "models": REKA_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -551,8 +573,11 @@ def nova_headers(api_key: str, provider: str = "nova") -> Dict[str, str]:
     #  - Nova / Gemini (OpenAI-compatible route): Authorization: Bearer <key>
     #    (Gemini's OpenAI-compat endpoint at /v1beta/openai uses the standard
     #     Bearer header; x-goog-api-key is only for the native /v1beta/models API)
+    #  - Reka: X-Api-Key: <key>
     if provider == "foundry":
         return {"Content-Type": "application/json", "api-key": api_key}
+    if provider == "reka":
+        return {"Content-Type": "application/json", "X-Api-Key": api_key}
     return {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
 
 
@@ -599,7 +624,7 @@ async def call_llm(
     # Reasoning models (e.g. gpt-5 with effort) can take much longer; give them
     # a generous timeout so a deep analysis doesn't get cut off mid-think.
     # Local Ollama also gets 180s (model cold-load + slow 8B decode on big logs).
-    timeout = 180.0 if reasoning_effort else (180.0 if provider == "ollama" else 60.0)
+    timeout = 180.0 if (reasoning_effort or provider == "ollama" or provider == "reka") else 60.0
     async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(2):  # one retry for transient gateway 5xx
             try:
@@ -892,6 +917,8 @@ def _provider_key(provider: str) -> str:
         return INCEPTION_API_KEY
     if provider == "upstage":
         return UPSTAGE_API_KEY
+    if provider == "reka":
+        return REKA_API_KEY
     return NOVA_API_KEY
 
 
