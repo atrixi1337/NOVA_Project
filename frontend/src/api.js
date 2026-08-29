@@ -61,6 +61,9 @@ export const api = {
   // chat
   chat: (payload) => jpost('/api/chat', payload),
 
+  // image generation (DALL·E via Azure Foundry)
+  images: (payload) => jpost('/api/images', payload),
+
   // conversation history
   conversations: () => jget('/api/conversations'),
   newConversation: (body = {}) => jpost('/api/conversations', body),

@@ -17,6 +17,7 @@ const PROVIDER_META = {
   mistral:     { label: 'Mistral AI',           key: 'MISTRAL_API_KEY',       placeholder: 'Mistral API key' },
   inception:   { label: 'Inception Labs', key: 'INCEPTION_API_KEY', placeholder: 'Inception API key' },
   upstage:     { label: 'Upstage AI',     key: 'UPSTAGE_API_KEY',   placeholder: 'Upstage API key' },
+  reka:        { label: 'Reka AI',        key: 'REKA_API_KEY',      placeholder: 'Reka API key' },
 }
 
 function loadKeys() {
@@ -40,6 +41,10 @@ export default function SettingsModal({
   const [keys, setKeys] = useState({})
   const [saving, setSaving] = useState(false)
   const inputRef = useRef(null)
+  const [imgPrompt, setImgPrompt] = useState('')
+  const [imgGenBusy, setImgGenBusy] = useState(false)
+  const [imgGenError, setImgGenError] = useState('')
+  const [imgGenResult, setImgGenResult] = useState(null)
 
   useEffect(() => {
     if (open) setKeys(loadKeys())
@@ -157,6 +162,47 @@ export default function SettingsModal({
                 </select>
               </div>
             </div>
+          </div>
+
+          {/* ── Image Generation (Foundry DALL·E) ── */}
+          <div className="space-y-3">
+            <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">Image Generation (Foundry DALL·E)</h4>
+            <div>
+              <label className="block text-[12px] text-muted mb-1">Prompt</label>
+              <textarea
+                value={imgPrompt}
+                onChange={(e) => setImgPrompt(e.target.value)}
+                rows={2}
+                placeholder="A photorealistic sunset over a neon city, 8k…"
+                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors placeholder:text-muted/40 resize-none"
+              />
+            </div>
+            <div className="flex items-center gap-2.5">
+              <button
+                onClick={async () => {
+                  if (!imgPrompt.trim() || imgGenBusy) return
+                  setImgGenBusy(true); setImgGenError(''); setImgGenResult(null)
+                  try {
+                    const res = await api.images({ prompt: imgPrompt.trim(), n: 1, size: '1024x1024' })
+                    const u = res.data?.[0]?.url ||
+                      (res.data?.[0]?.b64_json ? 'data:image/png;base64,' + res.data[0].b64_json : null)
+                    setImgGenResult(u)
+                    if (!u) setImgGenError('No image returned')
+                  } catch (e) { setImgGenError(e.message) }
+                  setImgGenBusy(false)
+                }}
+                disabled={!imgPrompt.trim() || imgGenBusy}
+                className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-black hover:border-accent2 disabled:opacity-40 transition-all"
+              >
+                {imgGenBusy ? 'Generating…' : 'Generate'}
+              </button>
+              {imgGenError && <span className="text-[11px] text-err">{imgGenError}</span>}
+            </div>
+            {imgGenResult && (
+              <div className="pt-2">
+                <img src={imgGenResult} alt="generated" className="max-w-full rounded-lg border border-border" />
+              </div>
+            )}
           </div>
 
           {/* ── Language Mode (Malayalam) ── */}

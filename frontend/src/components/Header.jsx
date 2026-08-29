@@ -20,8 +20,7 @@ export default function Header({ onSettings, onMenu, providerLabel, model }) {
           </button>
         )}
         <div className="flex items-center gap-2">
-          <img src="/logo.png" alt="Sallaapam" className="h-6 w-auto object-contain" />
-          <span className="font-semibold text-[15px] text-accent">Sallaapam</span>
+          <img src="/logo.png" alt="Sallaapam" className="h-6 w-6 object-contain" />
         </div>
       </div>
       <div className="flex items-center gap-3">

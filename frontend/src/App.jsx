@@ -55,6 +55,20 @@ export default function App() {
   // ── chat state ──
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
+  const [attachedImages, setAttachedImages] = useState([]) // image_url blocks
+  const fileInputRef = useRef(null)
+  const onAttachFiles = (e) => {
+    const files = Array.from(e.target.files || []).filter((f) => f.type.startsWith('image/'))
+    if (!files.length) return
+    files.forEach((file) => {
+      const r = new FileReader()
+      r.onload = () =>
+        setAttachedImages((as) => [...as, { id: `${file.name}-${Date.now()}`, dataUrl: r.result }])
+      r.readAsDataURL(file)
+    })
+    e.target.value = '' // allow re-selecting the same file
+  }
+  const removeImage = (id) => setAttachedImages((as) => as.filter((a) => a.id !== id))
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [lastMeta, setLastMeta] = useState(null)
@@ -179,7 +193,7 @@ export default function App() {
   // ── chat ──
   const send = async () => {
     const text = input.trim()
-    if (!text || busy) return
+    if ((!text && attachedImages.length === 0) || busy) return
 
     let cid = currentId
     if (!cid) {
@@ -195,9 +209,19 @@ export default function App() {
     }
 
     setErr('')
-    const next = [...messages, { role: 'user', content: text }]
+    const userContent = attachedImages.length
+      ? [
+          ...(text ? [{ type: 'text', text }] : []),
+          ...attachedImages.map((img) => ({
+            type: 'image_url',
+            image_url: { url: img.dataUrl },
+          })),
+        ]
+      : text
+    const next = [...messages, { role: 'user', content: userContent }]
     setMessages(next)
     setInput('')
+    setAttachedImages([])
     setBusy(true)
     setLastMeta(null)
     // In Malayalam mode, route the chat through the Gemini provider and prepend a
@@ -314,7 +338,7 @@ export default function App() {
                     <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto">
                       <span className="text-2xl">✨</span>
                     </div>
-                    <h2 className="text-lg font-medium text-text">Sallaapam Chat</h2>
+                    <h2 className="text-lg font-medium text-text">Sallaapam</h2>
                     <p className="text-sm text-muted">
                       Ask me anything — analyze logs, write code, research threats, or just chat.
                     </p>
@@ -352,22 +376,53 @@ export default function App() {
             <div className="border-t border-border bg-panel p-4">
               <div className="mx-auto max-w-[820px]">
                 <div className="relative">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    ref={fileInputRef}
+                    onChange={onAttachFiles}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={busy}
+                    className="absolute left-2 bottom-2.5 p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors z-10"
+                    title="Attach image"
+                  >
+                    📎
+                  </button>
                   <textarea
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={onKeyDownInput}
                     rows={1}
                     placeholder="Message Sallaapam…  (Enter to send, Shift+Enter for newline)"
-                    className="w-full resize-none bg-black text-text border border-border rounded-2xl px-4 py-3 text-[14px] outline-none focus:border-accent2 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40"
+                    className="w-full resize-none bg-black text-text border border-border rounded-2xl pl-10 pr-4 py-3 text-[14px] outline-none focus:border-accent2 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40"
                   />
                   <button
                     onClick={send}
-                    disabled={busy || !input.trim()}
+                    disabled={busy || (!input.trim() && attachedImages.length === 0)}
                     className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-accent text-black font-semibold text-[13px] disabled:opacity-40 hover:brightness-90 transition-all"
                   >
                     {busy ? '…' : 'Send'}
                   </button>
                 </div>
+                {attachedImages.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {attachedImages.map((img) => (
+                      <div key={img.id} className="relative w-16 h-16 rounded-lg overflow-hidden border border-border">
+                        <img src={img.dataUrl} alt="attach" className="w-full h-full object-cover" />
+                        <button
+                          onClick={() => removeImage(img.id)}
+                          className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-err text-white flex items-center justify-center text-[10px]"
+                          title="Remove"
+                        >✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {lastMeta && (
                   <div className="mt-1.5 text-[11px] text-muted flex items-center gap-2">
                     <span>{lastMeta.provider}</span>

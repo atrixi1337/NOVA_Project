@@ -1,0 +1,8 @@
+# cloudflared tunnel config — copy to ~/.cloudflared/config.yml
+# (deploy-laptop.sh fills tunnel: / credentials-file: / hostname: automatically)
+tunnel: <TUNNEL_ID>                       # e.g. 11111111-2222-3333-4444-555555555555
+credentials-file: ~/.cloudflared/<TUNNEL_ID>.json   # same id, as .json
+ingress:
+  - hostname: <DOMAIN>                   # e.g. app.example.com  -> http://localhost:8000
+    service: http://localhost:8000
+  - service: http_status:404             # catch-all: deny everything else

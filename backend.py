@@ -59,6 +59,10 @@ FOUNDRY_DEFAULT_MODEL = os.getenv("FOUNDRY_MODEL", "gpt-5-mini")
 FOUNDRY_MODELS = [
     m.strip() for m in os.getenv("FOUNDRY_MODELS", "gpt-5-mini,gpt-4o,gpt-4o-mini").split(",") if m.strip()
 ]
+# Image-generation model for the Foundry provider (DALL·E 3 / gpt-image).
+# The chat defaults (gpt-5-mini, gpt-4o…) are chat models and will NOT generate
+# images — set FOUNDRY_IMAGE_MODEL to the DALL·E deployment name on Foundry.
+FOUNDRY_IMAGE_MODEL = os.getenv("FOUNDRY_IMAGE_MODEL", "dall-e-3")
 
 # ---- provider: Google Gemini via its OpenAI-compatible endpoint ----
 GEMINI_BASE_URL = os.getenv(
@@ -1061,6 +1065,29 @@ def db_delete_conversation(cid: str) -> bool:
     return cur.rowcount > 0
 
 
+def _coerce_content(content) -> str:
+    """Flatten any message content (str, list of blocks, dict) into a plain
+    string for SQLite history storage. Non-text blocks (image_url, audio_url,
+    file, …) become a short placeholder so the transcript stays
+    readable/searchable instead of crashing the TEXT column binder."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(block.get("text") or "")
+                else:
+                    parts.append(f"[{block.get('type')} attached]")
+            else:
+                parts.append(str(block))
+        return "\n".join(p for p in parts if p)
+    return str(content)
+
+
 def db_save_message(
     cid: str, role: str, content: Optional[str], model: Optional[str],
     provider: Optional[str], reasoning: Optional[str] = None,
@@ -1073,7 +1100,7 @@ def db_save_message(
     conn.execute(
         """INSERT INTO messages (conversation_id, role, content, model, provider, reasoning, usage_json, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (cid, role, content or "", model, provider, reasoning,
+        (cid, role, _coerce_content(content), model, provider, reasoning,
          json.dumps(usage) if usage else None, now),
     )
     # Touch the conversation's updated_at.
@@ -1081,9 +1108,10 @@ def db_save_message(
     # Auto-title: if title is the default, derive from the first non-empty user msg.
     if role == "user" and HISTORY_AUTO_TITLE_FROM_FIRST:
         row = conn.execute("SELECT title FROM conversations WHERE id = ?", (cid,)).fetchone()
-        if row and row["title"] == "New conversation" and content:
-            title = content.strip()[:60]
-            if len(content.strip()) > 60:
+        txt = _coerce_content(content).strip()
+        if row and row["title"] == "New conversation" and txt:
+            title = txt[:60]
+            if len(txt) > 60:
                 title += "…"
             conn.execute("UPDATE conversations SET title = ? WHERE id = ?", (title, cid))
     conn.commit()
@@ -1386,6 +1414,57 @@ def build_analyzer_prompt(text: str, mode: str, max_chars: int) -> str:
         f"{text}\n"
         "=== LOG CONTENT (end) ==="
     )
+
+
+class ImageRequest(BaseModel):
+    """Body for the image-generation endpoint (POST /api/images)."""
+    prompt: str
+    model: Optional[str] = None
+    n: int = Field(1, ge=1, le=4)
+    size: str = "1024x1024"
+    response_format: str = "url"  # "url" or "b64"
+
+
+@app.post("/api/images")
+async def generate_image(req: ImageRequest):
+    """Generate an image via an OpenAI-compatible /images/generations endpoint.
+
+    Currently routed to Azure Foundry (DALL·E 3 / gpt-image via
+    FOUNDRY_IMAGE_MODEL). The Foundry *chat* models in FOUNDRY_MODELS are
+    chat-only and will NOT generate images — the deployment named by
+    FOUNDRY_IMAGE_MODEL must be a real DALL·E / gpt-image deployment.
+
+    NOTE: the Foundry host (atrixi-6635-resource.services.ai.azure.com) is
+    unreachable on this offline box (DNS), so this route is implemented but
+    NOT exercised locally — it activates once Foundry DNS is reachable.
+    """
+    if not FOUNDRY_API_KEY:
+        raise HTTPException(
+            status_code=400,
+            detail="Foundry API key (FOUNDRY_API_KEY) not configured on the server.",
+        )
+    base = FOUNDRY_BASE_URL.rstrip("/")
+    body: Dict[str, Any] = {
+        "model": req.model or FOUNDRY_IMAGE_MODEL,
+        "prompt": req.prompt, "n": req.n, "size": req.size,
+    }
+    if req.response_format == "b64":
+        body["response_format"] = "b64_json"
+    headers = {"Authorization": f"Bearer {FOUNDRY_API_KEY}",
+               "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as c:
+            r = await c.post(f"{base}/images/generations", headers=headers, json=body)
+        if r.status_code != 200:
+            raise HTTPException(r.status_code,
+                                f"Foundry image error: {r.text[:500]}")
+        return r.json()
+    except httpx.TimeoutException as e:
+        raise HTTPException(504, f"Foundry image request timed out: {e}")
+    except httpx.ConnectError as e:
+        raise HTTPException(502, f"Foundry image endpoint unreachable (offline): {e}")
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Foundry image request failed: {e}")
 
 
 @app.post("/api/analyze")

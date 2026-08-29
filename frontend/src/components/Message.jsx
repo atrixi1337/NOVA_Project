@@ -46,10 +46,40 @@ function Markdown({ content }) {
 }
 
 // Renders a message content. Handles markdown for assistant messages,
-// plain text for user messages, and thinking state.
+// plain text for user messages, and thinking state. Also supports
+// multi-modal user messages whose `content` is a list of content blocks
+// (text + image_url blocks from image/file uploads).
+function UserContent({ content }) {
+  if (Array.isArray(content)) {
+    return (
+      <div className="flex flex-col gap-2">
+        {content.map((block, i) => {
+          if (block?.type === 'text')
+            return <div key={i} className="whitespace-pre-wrap">{block.text || ''}</div>
+          if (block?.type === 'image_url')
+            return (
+              <img
+                key={i}
+                src={block.image_url?.url || ''}
+                alt="attachment"
+                className="max-w-[260px] max-h-[260px] object-contain rounded-lg border border-border"
+              />
+            )
+          return null
+        })}
+      </div>
+    )
+  }
+  return <div className="whitespace-pre-wrap">{content}</div>
+}
+
 export default function Message({ msg }) {
   const isUser = msg.role === 'user'
-  const hasContent = msg.content && msg.content.trim()
+  const hasContent = msg.content && (
+    typeof msg.content === 'string'
+      ? msg.content.trim()
+      : Array.isArray(msg.content) && msg.content.length > 0
+  )
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} px-3 sm:px-6`}>
@@ -75,7 +105,7 @@ export default function Message({ msg }) {
           }`}
         >
           {isUser ? (
-            <div className="whitespace-pre-wrap">{msg.content}</div>
+            <UserContent content={msg.content} />
           ) : hasContent ? (
             <Markdown content={msg.content} />
           ) : (

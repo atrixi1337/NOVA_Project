@@ -7,4 +7,7 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    # Persist chat history (SQLite) across container rebuilds/restarts.
+    volumes:
+      - ./nova_history.db:/app/nova_history.db
     restart: unless-stopped

@@ -67,7 +67,7 @@ export default function Sidebar({
         <div className="flex items-center justify-between px-1 py-1">
           <div className="flex items-center gap-2.5">
             <img src="/logo.png" alt="Sallaapam" className="w-7 h-7 object-contain" />
-            <span className="font-semibold text-[16px] text-text">Sallaapam Chat</span>
+            <span className="font-semibold text-[16px] text-text">Sallaapam</span>
           </div>
           <button
             onClick={() => { onSettings(); onClose?.() }}
