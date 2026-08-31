@@ -28,6 +28,7 @@ REG = os.environ.get("REGION", "ap-southeast-1")
 IID = os.environ["ECS_INSTANCE"]
 BOT = os.environ["TG_BOT_TOKEN"]
 DOMAIN = os.environ.get("DOMAIN", "sallaapam.duckdns.org")
+ALLOWED = os.environ.get("TG_ALLOWED_CHAT_ID", "").strip()
 
 
 def _pct(s):
@@ -79,6 +80,16 @@ def handle(update):
         return
     chat = m["chat"]["id"]
     txt = (m.get("text") or "").strip().lower()
+    # Secure-by-default: until TG_ALLOWED_CHAT_ID is set, tell the first DMer
+    # their chat_id (no ECS access). Once set, only that chat may control.
+    if not ALLOWED:
+        tg(chat, "👋 Hi. Your `chat_id` is `" + str(chat) +
+           "`\nSet env `TG_ALLOWED_CHAT_ID=" + str(chat) +
+           "` on the bot host to authorize this chat.\nUntil then /up /down /status are locked.")
+        return
+    if str(chat) != ALLOWED:
+        tg(chat, "🔒 not authorized — ask the bot owner.")
+        return
     try:
         if txt in ("/up", "/start"):
             ecs("StartInstance")

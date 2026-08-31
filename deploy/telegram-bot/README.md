@@ -8,16 +8,16 @@ policy only allows `ecs:DescribeInstances` (on `instance/*`) and
 `ecs:StartInstance`/`ecs:StopInstance` (on this one instance). It never uses
 your main Alibaba AccessKey.
 
-## 1. Get a bot token + your chat id
+## 1. Get a bot token + authorize your Telegram id
 1. Open Telegram → talk to **@BotFather** → `/newbot` → copy the token.
-2. Start a DM with your bot → send `/start`.
-3. Grab your chat id (only you can send commands):
-   ```
-   curl -s "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates" \
-     | jq -r '.result[0].message.chat.id'     # this is your chat id
-   ```
-   The bot only replies to `TG_ALLOWED_CHAT_ID` (see step 3) — if you want to
-   lock it to your id, uncomment the filter in `index.py`.
+2. Start a DM with your bot → send `/start`. Because `TG_ALLOWED_CHAT_ID` is
+   not set yet, the bot replies with **your own `chat_id`** (and does **not**
+   touch ECS) e.g. `Your chat_id is 123456… — set TG_ALLOWED_CHAT_ID=123456…`
+   *(no command line; read it from the DM).*
+3. Harden it: set `TG_ALLOWED_CHAT_ID=<that id>` on the host and update
+   (so only your Telegram account can run `/up`/`/down`/`/status`) — see
+   "Lock it to your id" below. The bot enforces `TG_ALLOWED_CHAT_ID` whenever it
+   is set; until then it only ever echoes the chat_id (never stops the server).
 
 ## 2. Create the scoped RAM user + policy
 The policy is in `nova-bot-ecs-policy.json` (Describe on `instance/*`,
@@ -108,6 +108,12 @@ location /bot { proxy_pass http://127.0.0.1:8080; proxy_read_timeout 300s; }
 ## Security
 - Only the scoped `nova-bot` RAM user (id/secret) reaches ECS — revoke it any
   time with `aliyun ram DeleteAccessKey`.
-- Optionally lock the bot to your Telegram id: uncomment the `TG_ALLOWED_CHAT_ID`
-  check in `index.py`.
+- Lock the bot to your Telegram id (recommended): once you have your `chat_id`
+  from step 1, set it as the `TG_ALLOWED_CHAT_ID` env var:
+  - **FC:** `aliyun fc UpdateFunction --functionName nova-poc-bot --body
+    '"{\"environmentVariables\":{\"TG_ALLOWED_CHAT_ID\":\"<id>\"}}"' `
+    (use `null` / omit to go back to open setup mode).
+  - **Host:** add `TG_ALLOWED_CHAT_ID=<id>` to `/etc/nova-bot.env` +
+    `systemctl restart nova-poc-bot`.
+  - Until set, the bot only ever echoes your chat_id — it never stops the ECS.
 - Never commit `/etc/nova-bot.env` or the CSV to git (secrets are redacted here).
