@@ -110,17 +110,57 @@ def handle(update):
         tg(chat, f"⚠️ error: {type(e).__name__}: {e}")
 
 
+def _extract_body(event):
+    """FC 3.0 HTTP triggers deliver either the raw body (bytes/str) or a
+    request envelope {"version":"v1","rawPath":"/","headers":{...},"body":...}.
+    Unwrap either form; return a JSON string (or "" )."""
+    if isinstance(event, bytes):
+        raw = event.decode(errors="replace")
+    elif isinstance(event, str):
+        raw = event
+    elif isinstance(event, dict):
+        raw = json.dumps(event)
+    else:
+        raw = ""
+    if not raw:
+        return ""
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return raw
+    if isinstance(obj, dict):
+        # FC 3.0 HTTP trigger envelope (has request metadata): unwrap the body.
+        if ("headers" in obj) or ("rawPath" in obj and "version" in obj):
+            for k in ("body", "bodyBytes", "payload", "requestBody", "rawBody", "data"):
+                v = obj.get(k)
+                if isinstance(v, str):
+                    return v
+            bb = obj.get("bodyBytes")
+            if isinstance(bb, str):
+                import base64 as _b64
+                return _b64.b64decode(bb).decode(errors="replace")
+            return ""
+        if any(k in obj for k in ("message", "update_id", "callback_query", "edited_message")):
+            return raw
+    return raw if isinstance(obj, str) else json.dumps(obj)
+
+
 def handler(event, context=None):
-    """FC 3.0 HTTP entry point: event is the request body (str|dict)."""
-    body = (event if isinstance(event, str)
-            else (event.get("body", "") if isinstance(event, dict) else ""))
+    """FC 3.0 HTTP entry point. Unwraps the HTTP request envelope, dispatches
+    the Telegram update, and always returns 200 (Telegram needs a 200).
+    Returns a tiny JSON body with the update_id / any error for diagnostics —
+    harmless to Telegram, useful for `curl` checks."""
+    body = _extract_body(event)
+    out = {"ok": True}
     try:
         upd = json.loads(body or "{}")
         if isinstance(upd, dict):
+            out["update_id"] = upd.get("update_id")
             handle(upd)
-    except Exception:
-        pass
-    return {"statusCode": 200, "headers": {"content-type": "text/plain"}, "body": "ok"}
+    except Exception as e:
+        out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return {"statusCode": 200, "headers": {"content-type": "application/json"},
+            "body": json.dumps(out)}
 
 
 class _H:
