@@ -18,6 +18,7 @@ const PROVIDER_META = {
   inception:   { label: 'Inception Labs', key: 'INCEPTION_API_KEY', placeholder: 'Inception API key' },
   upstage:     { label: 'Upstage AI',     key: 'UPSTAGE_API_KEY',   placeholder: 'Upstage API key' },
   reka:        { label: 'Reka AI',        key: 'REKA_API_KEY',      placeholder: 'Reka API key' },
+  nvidia:      { label: 'NVIDIA NIM',     key: 'NVIM_API_KEY',      placeholder: 'nvapi-…' },
 }
 
 function loadKeys() {

@@ -245,6 +245,35 @@ REKA_MODELS = [
     if m.strip()
 ]
 
+# ---- provider: NVIDIA NIM / API Catalog (OpenAI-compatible) ----
+# https://integrate.api.nvidia.com/v1  Auth: Authorization: Bearer <nvapi-key>
+# (standard Bearer header, handled by nova_headers' default branch). The public
+# GET /v1/models lists the catalog; /chat/completions needs a Bearer nvapi- key.
+# Vision-capable models (meta/llama-3.2-90b-vision-instruct,
+# microsoft/phi-3-vision-128k-instruct, ...) accept image_url content blocks, so
+# image input flows through NIM the same way it does via Nova/Gemini. NOTE: the
+# public catalog does NOT expose image-generation models (no SD/Flux here) -
+# image generation stays on the Foundry DALL·E path (/api/images).
+NVIM_BASE_URL = os.getenv("NVIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+NVIM_API_KEY = os.getenv("NVIM_API_KEY", "")
+NVIM_DEFAULT_MODEL = os.getenv("NVIM_MODEL", "nvidia/nemotron-4-340b-instruct")
+# Models offered for the NVIDIA NIM provider in the UI picker (curated from the
+# live /v1/models catalog). Tailor NVIM_MODELS in .env to your quota.
+NVIM_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "NVIM_MODELS",
+        "nvidia/nemotron-4-340b-instruct,nvidia/llama-3.1-nemotron-70b-instruct,"
+        "nvidia/llama-3.1-nemotron-ultra-253b-v1,nvidia/nemotron-3.5-lightning-30b-a3b,"
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia/nemotron-3-super-120b-a12b,"
+        "meta/llama-3.2-90b-vision-instruct,meta/llama-3.2-11b-vision-instruct,"
+        "microsoft/phi-3-vision-128k-instruct,mistralai/mistral-large,"
+        "mistralai/mistral-nemotron,moonshotai/kimi-k2.6,"
+        "deepseek-ai/deepseek-v4-pro-0813,ibm/granite-34b-code-instruct",
+    ).split(",")
+    if m.strip()
+]
+
 # ---- provider: Cloudflare Workers AI (OpenAI-compatible; free 10k neurons/day) ----
 # Censored (cloud). Needs CLOUDFLARE_ACCOUNT_ID (in the base URL) + an API token
 # with Workers AI permission. Free tier = 10,000 Neurons/day (resets 00:00 UTC).
@@ -395,6 +424,7 @@ PROVIDERS = {
     "inception": {"label": "Inception Labs", "base_url": INCEPTION_BASE_URL, "default_model": INCEPTION_DEFAULT_MODEL, "models": INCEPTION_MODELS, "cloud": True},
     "upstage": {"label": "Upstage AI", "base_url": UPSTAGE_BASE_URL, "default_model": UPSTAGE_DEFAULT_MODEL, "models": UPSTAGE_MODELS, "cloud": True},
     "reka": {"label": "Reka AI", "base_url": REKA_BASE_URL, "default_model": REKA_DEFAULT_MODEL, "models": REKA_MODELS, "cloud": True},
+    "nvidia": {"label": "NVIDIA NIM", "base_url": NVIM_BASE_URL, "default_model": NVIM_DEFAULT_MODEL, "models": NVIM_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -923,6 +953,8 @@ def _provider_key(provider: str) -> str:
         return UPSTAGE_API_KEY
     if provider == "reka":
         return REKA_API_KEY
+    if provider == "nvidia":
+        return NVIM_API_KEY
     return NOVA_API_KEY
 
 
