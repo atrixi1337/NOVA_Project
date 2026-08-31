@@ -1,0 +1,15 @@
+[Unit]
+Description=NOVA Telegram bot (start/stop ECS i-t4n6s906crezn4x97owh)
+After=network-online.target
+
+[Service]
+Type=simple
+# Put the env vars (never the policy file / keys here) in:
+EnvironmentFile=/etc/nova-bot.env    # chmod 600 ; owned by root
+ExecStart=/usr/bin/python3 /opt/nova-bot/index.py
+Restart=unless-stopped
+# Harden: the bot only needs outbound :443 (api.telegram.org + ecs.*.aliyuncs.com)
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

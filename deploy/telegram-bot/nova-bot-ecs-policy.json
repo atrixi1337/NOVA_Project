@@ -1,0 +1,15 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Action": ["ecs:DescribeInstances"],
+      "Effect": "Allow",
+      "Resource": ["acs:ecs:ap-southeast-1:5242187308518885:instance/*"]
+    },
+    {
+      "Action": ["ecs:StartInstance", "ecs:StopInstance"],
+      "Effect": "Allow",
+      "Resource": ["acs:ecs:ap-southeast-1:5242187308518885:instance/i-t4n6s906crezn4x97owh"]
+    }
+  ]
+}
