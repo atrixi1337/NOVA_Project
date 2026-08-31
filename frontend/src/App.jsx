@@ -60,6 +60,13 @@ export default function App() {
   const onAttachFiles = (e) => {
     const files = Array.from(e.target.files || []).filter((f) => f.type.startsWith('image/'))
     if (!files.length) return
+    // NVIDIA NIM's public vision models are provisioned with limit-mm-per-prompt=1,
+    // so a multi-image request bounces back as an opaque 400 ("At most 1 image may
+    // be provided"). Cap it here instead, with a clear message, when NIM is selected.
+    if (provider === 'nvidia' && files.length > 1) {
+      setErr('NVIDIA NIM allows only 1 image per request; using the first image.')
+      files.splice(1)
+    }
     files.forEach((file) => {
       const r = new FileReader()
       r.onload = () =>

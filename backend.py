@@ -658,7 +658,9 @@ async def call_llm(
     # Reasoning models (e.g. gpt-5 with effort) can take much longer; give them
     # a generous timeout so a deep analysis doesn't get cut off mid-think.
     # Local Ollama also gets 180s (model cold-load + slow 8B decode on big logs).
-    timeout = 180.0 if (reasoning_effort or provider == "ollama" or provider == "reka") else 60.0
+    # NVIDIA NIM vision models (90B+) can also be slow to first token on a cold
+    # request, so give them the same generous budget as Ollama/Reka.
+    timeout = 180.0 if (reasoning_effort or provider in ("ollama", "reka", "nvidia")) else 60.0
     async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(2):  # one retry for transient gateway 5xx
             try:
