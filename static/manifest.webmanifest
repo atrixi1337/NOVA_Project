@@ -1,0 +1,11 @@
+{
+  "name": "NOVA Mobile",
+  "short_name": "NOVA",
+  "start_url": "/mobile",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0ea5e2",
+  "icons": [
+    { "src": "/logo.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

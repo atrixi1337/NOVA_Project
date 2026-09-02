@@ -42,6 +42,13 @@ except ImportError:  # pragma: no cover
 # ----------------------------------------------------------------------------
 NOVA_BASE_URL = os.getenv("NOVA_BASE_URL", "https://api.nova.amazon.com/v1")
 NOVA_API_KEY = os.getenv("NOVA_API_KEY", "")
+# HTTP admin/API key that gates mutating (non-GET) requests now that the
+# service is exposed publicly via the named Cloudflare Tunnel (nova.terminalflaw.xyz).
+# When NOVA_ADMIN_KEY is set, POST/PUT/PATCH/DELETE require:
+#   Authorization: Bearer <NOVA_ADMIN_KEY>
+# When unset, non-GET requests are allowed but a DEV warning is logged so local
+# dev / the mobile panel still work without a key.
+ADMIN_API_KEY = os.getenv("NOVA_ADMIN_KEY", "")
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("APP_PORT", "8000"))
 DEFAULT_MODEL = os.getenv("NOVA_MODEL", "nova-2-lite-v1")
@@ -597,6 +604,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _require_admin_key_for_mutations(request: Request, call_next):
+    """Gate mutating (non-GET/HEAD/OPTIONS) requests behind NOVA_ADMIN_KEY.
+
+    GET/HEAD/OPTIONS stay public (health, models, the mobile panel, static assets).
+    POST/PUT/PATCH/DELETE are rejected with 401 when NOVA_ADMIN_KEY is configured
+    and the `Authorization: Bearer <key>` header is missing/invalid. If the key is
+    unset we fail-open with a logged warning so local dev keeps working.
+
+    NOTE: this hardens the now-public endpoint. Because the API key must stay
+    server-side (see module docstring), the in-browser SPA can no longer call
+    chat/images/conversations directly; use curl/headers with the key instead,
+    or exempt /api/chat if you prefer the browser to keep chatting.
+    """
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        if ADMIN_API_KEY:
+            auth = request.headers.get("Authorization", "")
+            if auth != f"Bearer {ADMIN_API_KEY}":
+                return JSONResponse(
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                    content={"detail": "Unauthorized: provide a valid NOVA_ADMIN_KEY bearer token"},
+                )
+        else:
+            logger.warning(
+                "NOVA_ADMIN_KEY not set: allowing mutating request %s %s (DEV ONLY)",
+                request.method,
+                request.url.path,
+            )
+    return await call_next(request)
+
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -1612,6 +1652,12 @@ async def analyze(
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/mobile")
+async def mobile_panel():
+    """Mobile-first PWA status dashboard (provider dots live from /api/health)."""
+    return FileResponse(STATIC_DIR / "mobile.html")
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
