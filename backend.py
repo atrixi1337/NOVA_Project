@@ -211,6 +211,25 @@ INCEPTION_MODELS = [
     if m.strip()
 ]
 
+# ---- provider: Agnes AI (OpenAI-compatible; Bearer auth) ----
+# https://www.agnes-ai.com  Auth is the standard Authorization: Bearer header
+# (handled by nova_headers' default branch); it shares the /chat/completions
+# path with the other OpenAI-compatible providers. agnes-2.5-pro is the flagship
+# commercial model; agnes-2.5-flash is the fast/mid model. (Deprecated:
+# agnes-2.0-flash, agnes-2.5-pro-alpha.)
+AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
+AGNES_API_KEY = os.getenv("AGNES_API_KEY", "")
+AGNES_DEFAULT_MODEL = os.getenv("AGNES_MODEL", "agnes-2.5-pro")
+# Models offered for the Agnes provider in the UI picker.
+AGNES_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "AGNES_MODELS",
+        "agnes-2.5-pro,agnes-2.5-pro-beta,agnes-2.5-flash",
+    ).split(",")
+    if m.strip()
+]
+
 # ---- provider: Upstage AI (OpenAI-compatible; solar-pro4, reasoning-capable) ----
 # https://docs.upstage.ai/guide/api-workspace/api-reference  Bearer auth; shares the
 # /chat/completions path. solar-pro4 supports extended reasoning (reasoning_effort).
@@ -425,6 +444,7 @@ PROVIDERS = {
     "upstage": {"label": "Upstage AI", "base_url": UPSTAGE_BASE_URL, "default_model": UPSTAGE_DEFAULT_MODEL, "models": UPSTAGE_MODELS, "cloud": True},
     "reka": {"label": "Reka AI", "base_url": REKA_BASE_URL, "default_model": REKA_DEFAULT_MODEL, "models": REKA_MODELS, "cloud": True},
     "nvidia": {"label": "NVIDIA NIM", "base_url": NVIM_BASE_URL, "default_model": NVIM_DEFAULT_MODEL, "models": NVIM_MODELS, "cloud": True},
+    "agnes": {"label": "Agnes AI", "base_url": AGNES_BASE_URL, "default_model": AGNES_DEFAULT_MODEL, "models": AGNES_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -951,6 +971,8 @@ def _provider_key(provider: str) -> str:
         return MISTRAL_API_KEY
     if provider == "inception":
         return INCEPTION_API_KEY
+    if provider == "agnes":
+        return AGNES_API_KEY
     if provider == "upstage":
         return UPSTAGE_API_KEY
     if provider == "reka":
