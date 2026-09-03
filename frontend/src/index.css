@@ -123,3 +123,37 @@ button, select, input, textarea {
   50% { opacity: 0.3; }
 }
 .animate-pulse { animation: pulse 1.5s ease-in-out infinite; }
+
+/* ── Mobile: keep assistant reply bubbles from overflowing the viewport ──
+   Long unbroken strings, wide tables, images, and code blocks must wrap
+   within the message bubble instead of forcing horizontal scroll. */
+.md {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.md img {
+  max-width: 100%;
+  height: auto;
+}
+.md pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-x: auto; /* safety net for truly unbreakable tokens */
+}
+.md code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.md table {
+  width: 100%;
+  max-width: 100%;
+  table-layout: auto;
+  overflow-wrap: anywhere;
+}
+.md th,
+.md td {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
