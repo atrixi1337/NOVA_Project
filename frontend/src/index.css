@@ -2,49 +2,39 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Naru Mono / JetBrains Mono — self-hosted monospace font */
-@font-face {
-  font-family: 'JetBrains Mono';
-  src: url('/fonts/jetbrains-mono-regular.woff2') format('woff2');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: 'JetBrains Mono';
-  src: url('/fonts/jetbrains-mono-italic.woff2') format('woff2');
-  font-weight: 400;
-  font-style: italic;
-  font-display: swap;
-}
-@font-face {
-  font-family: 'JetBrains Mono';
-  src: url('/fonts/jetbrains-mono-bold.woff2') format('woff2');
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
-
+/* Fonts: IBM Plex Mono (body) + Cormorant Garamond (serif headings)
+   loaded via <link> in index.html (melancholic site uses the same pair). */
 html, body, #root {
   height: 100%;
   margin: 0;
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 body {
-  background: #000000;
-  color: #e0e0e0;
+  background: #0b0a09;
+  color: #d6d0c2;
 }
 
 /* Global */
 * {
-  border-color: #1a1a1a;
+  border-color: #24221d;
 }
 
 /* thin scrollbars */
 *::-webkit-scrollbar { width: 6px; height: 6px; }
-*::-webkit-scrollbar-thumb { background: #222222; border-radius: 4px; }
+*::-webkit-scrollbar-thumb { background: #2e2c27; border-radius: 4px; }
 *::-webkit-scrollbar-track { background: transparent; }
+
+/* Smooth transitions */
+button, select, input, textarea {
+  transition: opacity 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+/* amber selection (melancholic touch) */
+::selection { background: #c9a227; color: #0b0a09; }
+
+/* small-caps utility for SOC-style labels */
+.small-caps { font-variant: small-caps; text-transform: uppercase; font-size: .8em; letter-spacing: .03em; }
 
 /* Smooth transitions */
 button, select, input, textarea {
@@ -63,20 +53,20 @@ button, select, input, textarea {
 .md ul { list-style: disc; }
 .md ol { list-style: decimal; }
 .md li { margin: 0.2em 0; }
-.md a { color: #4f9dff; text-decoration: underline; }
+.md a { color: #c9a227; text-decoration: underline; }
 .md blockquote {
-  border-left: 2px solid #222222; margin: 0.5em 0; padding: 0.2em 0.9em; color: #a0a0a0;
+  border-left: 2px solid #2e2c27; margin: 0.5em 0; padding: 0.2em 0.9em; color: #6f6a5d;
   font-style: italic;
 }
 .md table { border-collapse: collapse; margin: 0.6em 0; width: 100%; font-size: 0.92em; }
-.md th, .md td { border: 1px solid #1a1a1a; padding: 5px 9px; text-align: left; }
-.md th { background: #111111; }
-.md hr { border: none; border-top: 1px solid #1a1a1a; margin: 0.8em 0; }
+.md th, .md td { border: 1px solid #24221d; padding: 5px 9px; text-align: left; }
+.md th { background: #12100e; }
+.md hr { border: none; border-top: 1px solid #24221d; margin: 0.8em 0; }
 
 /* Code blocks */
 .md pre {
-  background: #000000;
-  border: 1px solid #1a1a1a;
+  background: #0b0a09;
+  border: 1px solid #24221d;
   border-radius: 8px;
   padding: 12px 14px;
   overflow-x: auto;
@@ -84,12 +74,12 @@ button, select, input, textarea {
   position: relative;
 }
 .md code {
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.88em;
 }
 .md :not(pre) > code {
-  background: #111111;
-  border: 1px solid #1a1a1a;
+  background: #12100e;
+  border: 1px solid #24221d;
   border-radius: 4px;
   padding: 1px 5px;
 }
@@ -102,16 +92,16 @@ button, select, input, textarea {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 6px;
-  border: 1px solid #1a1a1a;
-  background: #111111;
-  color: #888888;
+  border: 1px solid #24221d;
+  background: #12100e;
+  color: #6f6a5d;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
 }
 .md pre:hover .copy-btn { opacity: 1; }
-.copy-btn:hover { color: #e0e0e0; border-color: #4f9dff; }
+.copy-btn:hover { color: #d6d0c2; border-color: #c9a227; }
 
 /* collapsible elements */
 .collapsible > summary { cursor: pointer; list-style: none; user-select: none; }
@@ -124,7 +114,7 @@ button, select, input, textarea {
 }
 .animate-pulse { animation: pulse 1.5s ease-in-out infinite; }
 
-/* ── Mobile: keep assistant reply bubbles from overflowing the viewport ──
+/* ── Mobile: keep assistant reply bubbles within the viewport ──
    Long unbroken strings, wide tables, images, and code blocks must wrap
    within the message bubble instead of forcing horizontal scroll. */
 .md {

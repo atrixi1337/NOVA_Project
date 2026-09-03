@@ -55,7 +55,7 @@ function UserContent({ content }) {
       <div className="flex flex-col gap-2">
         {content.map((block, i) => {
           if (block?.type === 'text')
-            return <div key={i} className="whitespace-pre-wrap">{block.text || ''}</div>
+            return <div key={i} className="whitespace-pre-wrap overflow-wrap-anywhere">{block.text || ''}</div>
           if (block?.type === 'image_url')
             return (
               <img
@@ -70,7 +70,7 @@ function UserContent({ content }) {
       </div>
     )
   }
-  return <div className="whitespace-pre-wrap">{content}</div>
+  return <div className="whitespace-pre-wrap overflow-wrap-anywhere">{content}</div>
 }
 
 export default function Message({ msg }) {

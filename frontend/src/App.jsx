@@ -406,7 +406,7 @@ export default function App() {
                     onKeyDown={onKeyDownInput}
                     rows={1}
                     placeholder="Message Sallaapam…  (Enter to send, Shift+Enter for newline)"
-                    className="w-full resize-none bg-black text-text border border-border rounded-2xl pl-10 pr-4 py-3 text-[14px] outline-none focus:border-accent2 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40"
+                    className="w-full resize-none bg-panel text-text border border-border rounded-2xl pl-10 pr-4 py-3 text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40"
                   />
                   <button
                     onClick={send}
