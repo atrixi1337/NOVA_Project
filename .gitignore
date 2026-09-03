@@ -17,3 +17,7 @@ node_modules/
 frontend/dist/
 # Vite cache
 frontend/.vite/
+
+# never commit backups or .env variants
+*.bak
+.env.bak*

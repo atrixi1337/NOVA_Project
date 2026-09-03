@@ -405,7 +405,7 @@ AVAILABLE_MODELS = [
 
 # Which provider the UI defaults to on load.
 # Default is "ollama" (local, uncensored, offline) for cyber-research use.
-DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "ollama")
+DEFAULT_PROVIDER = os.getenv("DEFAULT_PROVIDER", "inception")
 
 # Providers the UI can switch between (all OpenAI-compatible; they differ only
 # in base URL + auth header, handled in call_llm / nova_headers).

@@ -44,8 +44,8 @@ export default function App() {
 
   // ── provider / model / mode state ──
   const [providers, setProviders] = useState({})
-  const [defaultProvider, setDefaultProvider] = useState('foundry')
-  const [provider, setProvider] = useState('foundry')
+  const [defaultProvider, setDefaultProvider] = useState('inception')
+  const [provider, setProvider] = useState('inception')
   const [model, setModel] = useState('auto')
   const [agent, setAgent] = useState(false)
   const [reasoningEffort, setReasoning] = useState('')
@@ -280,7 +280,7 @@ export default function App() {
     : activeModel
 
   return (
-    <div className="flex h-screen bg-bg text-text font-sans overflow-hidden">
+    <div className="flex h-[100dvh] bg-bg text-text font-sans overflow-hidden">
       {/* Mobile drawer backdrop (visible only on small screens when sidebar is open) */}
       <div
         className={`fixed inset-0 z-30 bg-black/60 backdrop-blur-sm md:hidden transition-opacity duration-200 ease-in-out ${
@@ -380,7 +380,7 @@ export default function App() {
             </div>
 
             {/* Input */}
-            <div className="border-t border-border bg-panel p-4">
+            <div className="border-t border-border bg-panel p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
               <div className="mx-auto max-w-[820px]">
                 <div className="relative">
                   <input
