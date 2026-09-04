@@ -1316,6 +1316,38 @@ async def chat(req: ChatRequest):
                 last_user_msg = m
                 break
 
+    # IFM/K2 Horizon (and other reasoning models) require every replayed
+    # assistant turn to carry its thinking trace — the model 400s with
+    # "missing a thinking field" otherwise. The UI forwards `reasoning`, but any
+    # client that replays an assistant message without it (or any future
+    # provider with the same contract) needs the real trace backfilled. We
+    # persisted every assistant turn's reasoning to SQLite (db_save_message
+    # stores `reasoning`; _coerce_content is identity for plain strings, so the
+    # content used to match is exactly what the client replayed), so recover it
+    # here and re-inject as reasoning_content. For providers that produce no
+    # reasoning this set is empty -> no-op. See https://docs.ifm.ai -> Multi-turn.
+    if save_history:
+        # Recover the thinking trace for any replayed assistant turn that the
+        # client dropped, so reasoning models (e.g. IFM K2 Horizon) don't 400
+        # with "missing a thinking field" on the 2nd+ turn. We persisted each
+        # assistant turn's `reasoning` server-side; _coerce_content is identity
+        # for plain strings, so content matches exactly. No-op for providers
+        # that produce no reasoning (saved reasoning is null -> empty map).
+        # See https://docs.ifm.ai -> Multi-turn conversations.
+        _saved = db_get_conversation(req.conversation_id) or {}
+        _by_reasoning = {
+            m.get("content", ""): (m.get("reasoning") or m.get("reasoning_content"))
+            for m in (_saved.get("messages") or [])
+            if m.get("role") == "assistant" and (m.get("reasoning") or m.get("reasoning_content"))
+        }
+        for _m in messages:
+            if (
+                _m.get("role") == "assistant"
+                and not any(_m.get(k) for k in ("reasoning_content", "reasoning", "think", "think_fast"))
+                and _m.get("content", "") in _by_reasoning
+            ):
+                _m["reasoning_content"] = _by_reasoning[_m["content"]]
+
     # Extract any reasoning summary the provider returned (e.g. gpt-5 on Foundry)
     # so the UI can show it in a collapsible box rather than inline.
     def grab_reasoning(data: Dict[str, Any]) -> Optional[str]:

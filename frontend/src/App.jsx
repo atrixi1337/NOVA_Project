@@ -247,7 +247,7 @@ export default function App() {
         conversation_id: cid,
         api_key: getUIKey(activeProvider) || undefined,
       })
-      setMessages([...next, { role: 'assistant', content: data.content }])
+      setMessages([...next, { role: 'assistant', content: data.content, reasoning: data.reasoning }])
       setLastMeta({
         model: data.model,
         provider: data.provider,
