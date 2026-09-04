@@ -293,6 +293,29 @@ NVIM_MODELS = [
     if m.strip()
 ]
 
+# ---- provider: IFM AI / MBZUAI K2 Horizon (OpenAI-compatible; Bearer auth) ----
+# https://docs.ifm.ai  Auth is the standard Authorization: Bearer header (handled by
+# nova_headers' default branch); shares the /chat/completions path with the other
+# OpenAI-compatible providers. K2 Horizon is a reasoning model — IFM exposes the
+# thinking budget via a non-standard chat_template_kwargs.reasoning_effort
+# (low/medium/high; "high" recommended for production) and returns the trace in
+# reasoning_content (mirrored as reasoning). IFM/K2-Horizon-375B-A23B (the 375B
+# sparse MoE) is the model served on the hosted API; it can be slow, so it gets
+# the generous 180s reasoning timeout below. K2 is stateless — each request must
+# carry the full messages array (nova already does this).
+IFM_BASE_URL = os.getenv("IFM_BASE_URL", "https://api.ifm.ai/v1")
+IFM_API_KEY = os.getenv("IFM_API_KEY", "")
+IFM_DEFAULT_MODEL = os.getenv("IFM_MODEL", "IFM/K2-Horizon-375B-A23B")
+# Models offered for the IFM provider in the UI picker.
+IFM_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "IFM_MODELS",
+        "IFM/K2-Horizon-375B-A23B",
+    ).split(",")
+    if m.strip()
+]
+
 # ---- provider: Cloudflare Workers AI (OpenAI-compatible; free 10k neurons/day) ----
 # Censored (cloud). Needs CLOUDFLARE_ACCOUNT_ID (in the base URL) + an API token
 # with Workers AI permission. Free tier = 10,000 Neurons/day (resets 00:00 UTC).
@@ -445,6 +468,7 @@ PROVIDERS = {
     "reka": {"label": "Reka AI", "base_url": REKA_BASE_URL, "default_model": REKA_DEFAULT_MODEL, "models": REKA_MODELS, "cloud": True},
     "nvidia": {"label": "NVIDIA NIM", "base_url": NVIM_BASE_URL, "default_model": NVIM_DEFAULT_MODEL, "models": NVIM_MODELS, "cloud": True},
     "agnes": {"label": "Agnes AI", "base_url": AGNES_BASE_URL, "default_model": AGNES_DEFAULT_MODEL, "models": AGNES_MODELS, "cloud": True},
+    "ifm": {"label": "IFM AI (K2 Horizon)", "base_url": IFM_BASE_URL, "default_model": IFM_DEFAULT_MODEL, "models": IFM_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -673,6 +697,11 @@ async def call_llm(
     # for Foundry gpt-5 family (others ignore/accept the field harmlessly).
     if reasoning_effort and ((provider == "foundry" and "gpt-5" in model) or provider == "upstage"):
         payload["reasoning_effort"] = reasoning_effort
+    # K2 Horizon exposes reasoning via a non-standard param: chat_template_kwargs
+    # .reasoning_effort (low/medium/high), not the OpenAI field. IFM recommends
+    # "high" for production; honour an explicit effort, else default K2 to high.
+    if provider == "ifm" and "K2" in model:
+        payload["chat_template_kwargs"] = {"reasoning_effort": reasoning_effort or "high"}
 
     last_err: Optional[str] = None
     # Reasoning models (e.g. gpt-5 with effort) can take much longer; give them
@@ -680,7 +709,7 @@ async def call_llm(
     # Local Ollama also gets 180s (model cold-load + slow 8B decode on big logs).
     # NVIDIA NIM vision models (90B+) can also be slow to first token on a cold
     # request, so give them the same generous budget as Ollama/Reka.
-    timeout = 180.0 if (reasoning_effort or provider in ("ollama", "reka", "nvidia")) else 60.0
+    timeout = 180.0 if (reasoning_effort or provider in ("ollama", "reka", "nvidia", "ifm")) else 60.0
     async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(2):  # one retry for transient gateway 5xx
             try:
@@ -973,6 +1002,8 @@ def _provider_key(provider: str) -> str:
         return INCEPTION_API_KEY
     if provider == "agnes":
         return AGNES_API_KEY
+    if provider == "ifm":
+        return IFM_API_KEY
     if provider == "upstage":
         return UPSTAGE_API_KEY
     if provider == "reka":
@@ -1289,7 +1320,7 @@ async def chat(req: ChatRequest):
     # so the UI can show it in a collapsible box rather than inline.
     def grab_reasoning(data: Dict[str, Any]) -> Optional[str]:
         msg = data.get("choices", [{}])[0].get("message", {}) if data.get("choices") else {}
-        r = msg.get("reasoning") or (data.get("reasoning") or "")
+        r = msg.get("reasoning") or msg.get("reasoning_content") or (data.get("reasoning") or data.get("reasoning_content") or "")
         return r.strip() if isinstance(r, str) and r.strip() else None
 
     # Agent loop: let the model call tools, feed results back, repeat.
