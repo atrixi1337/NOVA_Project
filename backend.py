@@ -768,7 +768,14 @@ async def call_llm(
                 logger.warning("%s — retrying", last_err)
                 continue
 
-            # Any non-2xx: extract a useful message and raise (no retry needed).
+            # Any non-2xx: surface a clean message and raise. IFM K2 Horizon can
+            # intermittently 400 "missing a thinking field" under rapid calls
+            # even when the trace was backfilled; retry that once (the payload
+            # already carries the thinking field) — other 4xx are fatal.
+            if resp.status_code == 400 and provider == "ifm" and "missing a thinking field" in (resp.text or ""):
+                last_err = f"{provider} 400 missing-thinking-field — retrying once"
+                logger.warning("%s (attempt %d)", last_err, attempt)
+                continue
             if resp.status_code >= 400:
                 detail = _clean_error(resp, provider)
                 raise HTTPException(status_code=resp.status_code, detail=detail)
