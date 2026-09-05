@@ -588,7 +588,18 @@ def tool_calculate(expression: str) -> str:
 
 def tool_read_file(filename: str, lines: int = 50) -> str:
     target = (SANDBOX_ROOT / filename).resolve()
-    if not str(target).startswith(str(SANDBOX_ROOT)):
+    # Containment must be a real filesystem check, not a string prefix: a
+    # resolved sibling like ".../NOVA_Project/../etc/passwd" still starts with
+    # the sandbox string, so a startswith() test would let ../.. escape. Use
+    # is_relative_to (strict) and confirm the parent is inside the sandbox.
+    try:
+        contained = target.is_relative_to(SANDBOX_ROOT) and target != SANDBOX_ROOT
+    except AttributeError:  # Python < 3.9 fallback
+        contained = (
+            os.path.commonpath([str(target), str(SANDBOX_ROOT)]) == str(SANDBOX_ROOT)
+            and target != SANDBOX_ROOT
+        )
+    if not contained:
         return f"Access denied: '{filename}' is outside the sandbox directory."
     if not target.exists():
         return f"File not found: {filename}"
@@ -1017,6 +1028,8 @@ def _provider_key(provider: str) -> str:
         return REKA_API_KEY
     if provider == "nvidia":
         return NVIM_API_KEY
+    if provider == "gmi":
+        return GMI_API_KEY
     return NOVA_API_KEY
 
 
@@ -1036,6 +1049,10 @@ def _db() -> sqlite3.Connection:
     conn = sqlite3.connect(HISTORY_DB)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # SQLite checks foreign keys only when this pragma is on (default is off), so
+    # the ON DELETE CASCADE on messages -> conversations would otherwise never fire and
+    # deleted conversations would leave orphaned message rows behind.
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 

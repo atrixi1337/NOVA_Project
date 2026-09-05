@@ -19,6 +19,9 @@ const PROVIDER_META = {
   upstage:     { label: 'Upstage AI',     key: 'UPSTAGE_API_KEY',   placeholder: 'Upstage API key' },
   reka:        { label: 'Reka AI',        key: 'REKA_API_KEY',      placeholder: 'Reka API key' },
   nvidia:      { label: 'NVIDIA NIM',     key: 'NVIM_API_KEY',      placeholder: 'nvapi-…' },
+  gmi:         { label: 'GMI Cloud',      key: 'GMI_API_KEY',       placeholder: 'GMI API key' },
+  agnes:       { label: 'Agnes AI',        key: 'AGNES_API_KEY',     placeholder: 'Agnes API key' },
+  ifm:         { label: 'IFM AI',          key: 'IFM_API_KEY',       placeholder: 'IFM API key' },
 }
 
 function loadKeys() {
