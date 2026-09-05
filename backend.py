@@ -1066,6 +1066,29 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_messages_cid ON messages(conversation_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at DESC);
+
+        -- Persistent token-usage ledger. Intentionally has NO foreign key to
+        -- conversations (and SQLite FK enforcement is off here) so usage rows
+        -- survive conversation deletion and "clear chat". One row is recorded
+        -- for every assistant turn that carries provider usage (see
+        -- db_save_message), so the lifetime token count per model/provider is
+        -- retained even when individual chats are pruned.
+        CREATE TABLE IF NOT EXISTS usage_ledger (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            role            TEXT NOT NULL,
+            provider        TEXT NOT NULL,
+            model           TEXT NOT NULL,
+            prompt_tokens   INTEGER,
+            completion_tokens INTEGER,
+            total_tokens    INTEGER,
+            reasoning_tokens INTEGER,
+            raw_usage       TEXT,
+            created_at      REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_ledger(model);
+        CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage_ledger(provider);
+        CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_ledger(created_at DESC);
         """
     )
     conn.commit()
@@ -1197,6 +1220,23 @@ def db_save_message(
         (cid, role, _coerce_content(content), model, provider, reasoning,
          json.dumps(usage) if usage else None, now),
     )
+    # Persistent token ledger: record usage for this turn even if the
+    # conversation is later cleared/deleted. Only assistant messages (and any
+    # message carrying provider usage) contribute; usage is reported per LLM
+    # response, so user/tool calls with no usage are skipped.
+    if usage:
+        u = usage or {}
+        conn.execute(
+            """INSERT INTO usage_ledger
+               (conversation_id, role, provider, model,
+                prompt_tokens, completion_tokens, total_tokens,
+                reasoning_tokens, raw_usage, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (cid, role, provider or "", model or "",
+             u.get("prompt_tokens"), u.get("completion_tokens"), u.get("total_tokens"),
+             u.get("reasoning_tokens") or u.get("thinking_tokens") or u.get("reasoning_output_tokens"),
+             json.dumps(u), now),
+        )
     # Touch the conversation's updated_at.
     conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
     # Auto-title: if title is the default, derive from the first non-empty user msg.
@@ -1214,6 +1254,107 @@ def db_save_message(
 
 # Initialize tables on import (idempotent, safe for containers).
 init_db()
+
+
+def db_usage_summary(provider: Optional[str] = None, model: Optional[str] = None,
+                     days: Optional[int] = None) -> Dict[str, Any]:
+    """Aggregate token usage across all models/providers/calls. Persists
+    independently of conversation deletion (see usage_ledger)."""
+    where: List[str] = []
+    params: List[Any] = []
+    if provider:
+        where.append("provider = ?"); params.append(provider)
+    if model:
+        where.append("model = ?"); params.append(model)
+    if days:
+        where.append("created_at >= ?"); params.append(time.time() - days * 86400)
+    clause = ("WHERE " + " AND ".join(where) + " ") if where else ""
+    conn = _db()
+    total = conn.execute(
+        f"""SELECT COALESCE(SUM(prompt_tokens),0),
+                  COALESCE(SUM(completion_tokens),0),
+                  COALESCE(SUM(total_tokens),0),
+                  COUNT(*)
+           FROM usage_ledger {clause}""",
+        params,
+    ).fetchone()
+    by_model = conn.execute(
+        f"""SELECT provider, model,
+                  COALESCE(SUM(prompt_tokens),0),
+                  COALESCE(SUM(completion_tokens),0),
+                  COALESCE(SUM(total_tokens),0),
+                  COUNT(*)
+           FROM usage_ledger
+           WHERE (model IS NOT NULL AND model != ''){" AND " + " AND ".join(where) if where else ""}
+           GROUP BY provider, model
+           ORDER BY 5 DESC""",
+        params,
+    ).fetchall()
+    by_provider = conn.execute(
+        f"""SELECT provider,
+                  COALESCE(SUM(prompt_tokens),0),
+                  COALESCE(SUM(completion_tokens),0),
+                  COALESCE(SUM(total_tokens),0),
+                  COUNT(*)
+           FROM usage_ledger {clause}
+           GROUP BY provider
+           ORDER BY 4 DESC""",
+        params,
+    ).fetchall()
+    by_day = conn.execute(
+        f"""SELECT date(datetime(created_at, 'unixepoch')) AS d,
+                  COALESCE(SUM(prompt_tokens),0),
+                  COALESCE(SUM(completion_tokens),0),
+                  COALESCE(SUM(total_tokens),0),
+                  COUNT(*)
+           FROM usage_ledger {clause}
+           GROUP BY d
+           ORDER BY d DESC
+           LIMIT 90""",
+        params,
+    ).fetchall()
+    first_seen = conn.execute("SELECT MIN(created_at) FROM usage_ledger").fetchone()[0]
+    conn.close()
+    return {
+        "total": {"prompt_tokens": total[0], "completion_tokens": total[1],
+                  "total_tokens": total[2], "calls": total[3]},
+        "by_model": [
+            {"provider": r[0], "model": r[1], "prompt_tokens": r[2],
+             "completion_tokens": r[3], "total_tokens": r[4], "calls": r[5]}
+            for r in by_model
+        ],
+        "by_provider": [
+            {"provider": r[0], "prompt_tokens": r[1], "completion_tokens": r[2],
+             "total_tokens": r[3], "calls": r[4]}
+            for r in by_provider
+        ],
+        "by_day": [
+            {"date": r[0], "prompt_tokens": r[1], "completion_tokens": r[2],
+             "total_tokens": r[3], "calls": r[4]}
+            for r in by_day
+        ],
+        "first_seen": first_seen,
+    }
+
+
+def db_usage_recent(limit: int = 50) -> List[Dict[str, Any]]:
+    """Latest usage ledger rows (most recent first)."""
+    conn = _db()
+    rows = conn.execute(
+        """SELECT provider, model, role, prompt_tokens, completion_tokens,
+                  total_tokens, reasoning_tokens, created_at
+           FROM usage_ledger
+           ORDER BY id DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [
+        {"provider": r[0], "model": r[1], "role": r[2], "prompt_tokens": r[3],
+         "completion_tokens": r[4], "total_tokens": r[5], "reasoning_tokens": r[6],
+         "created_at": r[7]}
+        for r in rows
+    ]
 
 
 @app.get("/api/conversations")
@@ -1273,6 +1414,31 @@ async def clear_conversation_messages(cid: str):
     removed = cur.rowcount
     conn.close()
     return {"ok": True, "removed": removed}
+
+
+@app.get("/api/usage")
+async def usage_summary(request: Request):
+    """Aggregate token usage across all models/providers, persisted for the
+    lifetime of the app regardless of chat clears/deletes.
+
+    Optional query filters:
+      ?provider=ifm                        restrict to a provider
+      ?model=<exact model id>              restrict to a model
+      ?days=30                             restrict to the last N days
+      ?recent=1                            include only the recent-row feed
+    Defaults to the all-time summary."""
+    q_provider = (request.query_params.get("provider") or "").strip() or None
+    q_model = (request.query_params.get("model") or "").strip() or None
+    days = request.query_params.get("days")
+    days = int(days) if days and days.isdigit() else None
+    recent_only = request.query_params.get("recent", "") == "1"
+
+    if recent_only:
+        return {"recent": db_usage_recent(50)}
+
+    s = db_usage_summary(q_provider, q_model, days)
+    s["recent"] = db_usage_recent(30)
+    return s
 
 
 @app.post("/api/chat")
@@ -1710,6 +1876,13 @@ async def index():
 async def mobile_panel():
     """Mobile-first PWA status dashboard (provider dots live from /api/health)."""
     return FileResponse(STATIC_DIR / "mobile.html")
+
+
+@app.get("/usage")
+async def usage_page():
+    """Self-contained token-usage dashboard (vanilla JS, no build step).
+    Pulls from /api/usage which persists across chat clears/deletes."""
+    return FileResponse(STATIC_DIR / "usage.html")
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
