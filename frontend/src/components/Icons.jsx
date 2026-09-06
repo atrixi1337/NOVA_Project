@@ -92,3 +92,18 @@ export const ChevronRight = ({ className = 'w-5 h-5' }) => (
   </svg>
 )
 export const X = Remove
+
+export const Shield = ({ className = 'w-5 h-5' }) => (
+  <svg
+    className={className}
+    fill="none"
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+      d="M12 2l7 3v5c0 4.42-3.06 8.23-7 9.73C8.06 15.23 5 11.42 5 10V5l7-3z" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+      d="M9 12l2 2 3-3" />
+  </svg>
+)

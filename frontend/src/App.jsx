@@ -8,7 +8,7 @@ import AgentTrace from './components/AgentTrace.jsx'
 import ReasoningBox from './components/ReasoningBox.jsx'
 import Analyzer from './components/Analyzer.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
-import { Sparkle, AttachmentPaperclip, Remove, SendSolid } from './components/Icons.jsx'
+import { Sparkle, AttachmentPaperclip, Remove, SendSolid, Shield } from './components/Icons.jsx'
 
 // Malayalam mode: route chats through the Gemini provider (multilingual, strong
 // Malayalam) and prepend a system instruction so the model replies only in
@@ -44,6 +44,31 @@ const QUICK_PROMPTS = [
   'Explain CVE-2024-3400 in plain terms',
   'Summarize these firewall rules for review',
 ]
+
+// Security Mode (NovaSec): swap the model instructions into a cybersecurity-expert
+// persona via a per-request system message. The backend forwards `role: system`
+// verbatim and skips its own default prompt when one is present, so this persona
+// is applied to whichever provider is selected. Cloud providers still apply their
+// own safety filters — for fully unrestricted content use Local Ollama on a host
+// with enough VRAM (not feasible on this phone). Scope is bounded to authorized
+// security research only.
+const SECURITY_MODE_SYSTEM_PROMPT =
+  'You are NovaSec, a cybersecurity-expert assistant in the Sallaapam lab chatbot. ' +
+  'Help with threat modeling, vulnerability analysis & triage, penetration-testing ' +
+  'methodology and reporting (for systems you own or are explicitly permitted to ' +
+  'test), secure-code review, CTF challenges, defensive security, incident response, ' +
+  'log/SIEM analysis, secure architecture, CVE explanation, and security-tool ' +
+  'prototyping for authorized lab networks. Reply concisely: short markdown, ' +
+  'copy-friendly code blocks, structured findings (severity/evidence/mitigation). ' +
+  'BOUNDARIES: do NOT plan or execute unauthorized intrusions; do NOT generate ' +
+  'malware, ransomware, or active-delivery attack payloads for unauthorized ' +
+  'targets; do NOT assist phishing or social-engineering against uninvolved parties; ' +
+  'do NOT bypass authentication/access controls on systems you do not own or lack ' +
+  'written permission for. If a request is near that line, first confirm the ' +
+  'target is in-scope/authorized, then answer with theory/methodology/explanation ' +
+  'rather than ready-to-run hostile tooling. Treat all output as educational/' +
+  'research material for authorized use. Note: cloud providers here still enforce ' +
+  'their own safety filters, so some restricted content may be refused regardless.'
 
 export default function App() {
   const [tab, setTab] = useState('chat')
@@ -95,6 +120,9 @@ export default function App() {
   const [malayalamMode, setMalayalamMode] = useState(() => {
     try { return localStorage.getItem('nova_malayalam_mode') === 'true' } catch { return false }
   })
+  const [securityMode, setSecurityMode] = useState(() => {
+    try { return localStorage.getItem('nova_security_mode') === 'true' } catch { return false }
+  })
   const [health, setHealth] = useState(null)
 
   const scrollRef = useRef(null)
@@ -104,10 +132,13 @@ export default function App() {
   useEffect(() => { if (provider === 'ollama') loadOllama() }, [provider])
   useEffect(() => { scrollToBottom() }, [messages, busy])
 
-  // Persist Malayalam-mode preference across reloads.
+  // Persist Malayalam-mode and Security-mode preferences across reloads.
   useEffect(() => {
     try { localStorage.setItem('nova_malayalam_mode', String(malayalamMode)) } catch {}
   }, [malayalamMode])
+  useEffect(() => {
+    try { localStorage.setItem('nova_security_mode', String(securityMode)) } catch {}
+  }, [securityMode])
 
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
@@ -242,12 +273,17 @@ export default function App() {
     setAttachedImages([])
     setBusy(true)
     setLastMeta(null)
-    // In Malayalam mode, route the chat through the Gemini provider and prepend a
-    // language instruction. The backend forwards system messages verbatim and
-    // skips its own system prompt when one is already present.
-    const sendMessages = malayalamMode
-      ? [{ role: 'system', content: MALAYALAM_SYSTEM_PROMPT }, ...next]
-      : next
+    // Compose outgoing messages. The backend forwards any `role: system` message
+    // verbatim and skips its own default prompt when one is present, so each mode
+    // swaps in its persona as a per-request system instruction. Malayalam mode
+    // takes precedence (it also routes to the Gemini provider).
+    const sendMessages = []
+    if (malayalamMode) {
+      sendMessages.push({ role: 'system', content: MALAYALAM_SYSTEM_PROMPT })
+    } else if (securityMode) {
+      sendMessages.push({ role: 'system', content: SECURITY_MODE_SYSTEM_PROMPT })
+    }
+    sendMessages.push(...next)
     try {
       const data = await api.chat({
         messages: sendMessages,
@@ -382,6 +418,9 @@ export default function App() {
                       <span className="px-2.5 py-1 bg-panel2 rounded-full">Agent mode</span>
                       <span className="px-2.5 py-1 bg-panel2 rounded-full">{Object.keys(providers).length} providers</span>
                       <span className="px-2.5 py-1 bg-panel2 rounded-full">History saved</span>
+                      {securityMode && !malayalamMode && (
+                        <span className="px-2.5 py-1 bg-accent2/15 text-accent2 rounded-full">NovaSec</span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -485,6 +524,12 @@ export default function App() {
                     )}
                   </div>
                 )}
+                {securityMode && !malayalamMode && (
+                  <div className="mt-1 text-[11px] flex items-center gap-2 text-accent2">
+                    <Shield className="w-3.5 h-3.5" />
+                    <span>NovaSec — cybersecurity-expert mode active</span>
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -516,6 +561,8 @@ export default function App() {
         health={health}
         malayalamMode={malayalamMode}
         setMalayalamMode={setMalayalamMode}
+        securityMode={securityMode}
+        setSecurityMode={setSecurityMode}
       />
     </div>
   )

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { api } from '../api.js'
+import { Shield } from './Icons.jsx'
 
 // Store API keys in localStorage (overrides server-side keys per-request)
 const KEY_STORAGE = 'nova_api_keys'
@@ -41,6 +42,8 @@ export default function SettingsModal({
   health,
   malayalamMode = false,
   setMalayalamMode,
+  securityMode = false,
+  setSecurityMode,
 }) {
   const [keys, setKeys] = useState({})
   const [saving, setSaving] = useState(false)
@@ -229,6 +232,36 @@ export default function SettingsModal({
             <p className="text-[11px] text-muted/60">
               Routes chats through Gemini and prompts it to reply only in Malayalam
               (script or Manglish, e.g. "sugamano").
+            </p>
+          </div>
+
+          {/* ── Security Mode (NovaSec) ── */}
+          <div className="space-y-3">
+            <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">Security Mode (NovaSec)</h4>
+            <div className="flex items-center justify-between">
+              <span className="text-[13px] text-text flex items-center gap-2">
+                <Shield className="w-4 h-4 text-accent2" />
+                Cybersecurity-expert persona
+              </span>
+              <label className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors">
+                <input
+                  type="checkbox"
+                  checked={!!securityMode}
+                  onChange={(e) => setSecurityMode(e.target.checked)}
+                  className="sr-only"
+                />
+                <span className={`inline-block h-5 w-9 rounded-full transition-colors ${securityMode ? 'bg-accent2' : 'bg-border'}`}>
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-panel2 transition-colors ${securityMode ? 'translate-x-5' : 'translate-x-1'}`} />
+                </span>
+              </label>
+            </div>
+            <p className="text-[11px] text-muted/60">
+              Prepends a cybersecurity-expert system instruction (threat modeling,
+              vuln triage, pentest methodology/reporting, CTF, log/SIEM, secure-code
+              review — authorized lab use only). Works with any provider; cloud
+              providers still apply their own safety filters. For fully unrestricted
+              content, run Local Ollama on a machine with enough VRAM — not feasible on
+              this phone.
             </p>
           </div>
 
