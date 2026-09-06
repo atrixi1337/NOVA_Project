@@ -609,7 +609,6 @@ export default function App() {
         }`}
         onClick={() => setSidebarOpen(false)}
       />
-
       {/* Sidebar: inline on desktop, off-canvas drawer on mobile */}
       <Sidebar
         conversations={conversations}
@@ -639,8 +638,8 @@ export default function App() {
           health={health}
         />
 
-        {/* Tabs */}
-        <div className="flex gap-0.5 sm:gap-1 px-2 sm:px-4 pt-2 border-b border-border bg-panel overflow-x-auto">
+        {/* Tabs (shrink-0: a tall tab body must never squash the bar to zero) */}
+        <div className="shrink-0 flex gap-0.5 sm:gap-1 px-2 sm:px-4 pt-2 border-b border-border bg-panel overflow-x-auto">
           {[['chat', 'Chat'], ['arena', 'Arena'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].map(([id, label]) => (
             <button
               key={id}
@@ -889,7 +888,9 @@ export default function App() {
             securityMode={securityMode}
           />
         ) : tab === 'usage' ? (
-          <UsageDashboard />
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <UsageDashboard />
+          </div>
         ) : (
           <div className="flex-1 overflow-y-auto">
             <Analyzer provider={provider} model={model} reasoningEffort={reasoningEffort} />
