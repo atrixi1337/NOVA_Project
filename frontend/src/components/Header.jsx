@@ -31,17 +31,18 @@ function HealthDot({ health }) {
 }
 
 // melancholic "SOC night shift" header — warm raised bar, amber wordmark with a
-// blinking indicator, a live clock, a backend health dot, a provider
-// quick-switch dropdown, and a small-caps model read-out.
+// blinking indicator, a backend health dot, a provider quick-switch dropdown,
+// and a small-caps model read-out. Desktop also gets a live clock; on phones
+// the bar stays lean (no logo/clock) so nothing overlaps or clips.
 export default function Header({ onSettings, onMenu, providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health }) {
   const hasProviders = onSwitchProvider && Object.keys(providers).length > 0
   return (
-    <header className="flex items-center justify-between px-4 py-2.5 bg-panel border-b border-border">
-      <div className="flex items-center gap-2">
+    <header className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 bg-panel border-b border-border">
+      <div className="flex items-center gap-2 min-w-0">
         {onMenu && (
           <button
             onClick={onMenu}
-            className="md:hidden p-1.5 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
+            className="md:hidden p-1.5 -ml-1 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
             title="Open conversations"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -50,22 +51,19 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
             </svg>
           </button>
         )}
-        <div className="flex items-center gap-2">
-          <img src="/logo.png" alt="Sallaapam" className="h-6 w-6 object-contain" />
-          <span className="font-serif text-[15px] text-text2">
-            Sallaapam<span className="text-accent animate-blink">●</span>
-          </span>
-        </div>
+        <span className="font-serif text-[15px] text-text2 whitespace-nowrap">
+          Sallaapam<span className="text-accent animate-blink">●</span>
+        </span>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <HealthDot health={health} />
-        <Clock />
+        <span className="hidden sm:inline"><Clock /></span>
         {hasProviders ? (
           <select
             value={activeProvider || ''}
             onChange={(e) => onSwitchProvider(e.target.value)}
             title="Switch provider"
-            className="bg-panel border border-border rounded-lg pl-2 pr-1 py-1 text-[11px] small-caps text-text2 outline-none cursor-pointer hover:border-accent2 max-w-[170px] md:max-w-[240px]"
+            className="min-w-0 max-w-[128px] sm:max-w-[240px] bg-panel border border-border rounded-lg pl-2 pr-1 py-1 text-[11px] small-caps text-text2 outline-none cursor-pointer hover:border-accent2 truncate"
           >
             {Object.entries(providers).map(([pid, p]) => (
               <option key={pid} value={pid} className="bg-panel text-text normal-case">
@@ -74,18 +72,18 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
             ))}
           </select>
         ) : providerLabel ? (
-          <span className="text-[12px] text-muted small-caps">
+          <span className="text-[12px] text-muted small-caps truncate">
             {providerLabel} · <span className="text-text2">{model}</span>
           </span>
         ) : null}
         {hasProviders && (
-          <span className="hidden sm:inline text-[11px] text-muted small-caps">
+          <span className="hidden md:inline text-[11px] text-muted small-caps">
             <span className="text-text2">{model}</span>
           </span>
         )}
         <button
           onClick={onSettings}
-          className="p-1.5 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
+          className="p-1.5 -mr-1 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
           title="Settings"
         >
           <Gear className="w-5 h-5" />

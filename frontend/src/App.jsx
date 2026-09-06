@@ -640,12 +640,12 @@ export default function App() {
         />
 
         {/* Tabs */}
-        <div className="flex gap-1 px-4 pt-2 border-b border-border bg-panel">
+        <div className="flex gap-0.5 sm:gap-1 px-2 sm:px-4 pt-2 border-b border-border bg-panel overflow-x-auto">
           {[['chat', 'Chat'], ['arena', 'Arena'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].map(([id, label]) => (
             <button
               key={id}
               onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
-              className={`px-4 py-2 text-[13px] font-medium rounded-t-lg border-b-2 transition-all
+              className={`whitespace-nowrap px-2.5 sm:px-4 py-2 text-[12px] sm:text-[13px] font-medium rounded-t-lg border-b-2 transition-all
                 ${tab === id
                   ? 'text-accent2 border-accent2 bg-panel2'
                   : 'text-muted border-transparent hover:text-text hover:bg-panel2/60'}`}>
@@ -818,7 +818,7 @@ export default function App() {
                     onKeyDown={onKeyDownInput}
                     onPaste={onPasteInto}
                     rows={1}
-                    placeholder="Message Sallaapam…  (Enter to send, Shift+Enter for newline)"
+                    placeholder="Message Sallaapam…"
                     className={`w-full resize-none bg-panel text-text border rounded-2xl pl-10 pr-[76px] py-3 text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40 ${
                       dragOver ? 'border-accent/60' : 'border-border'
                     }`}
