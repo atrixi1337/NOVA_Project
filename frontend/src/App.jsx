@@ -303,7 +303,7 @@ export default function App() {
         usage: data.usage,
       })
       setConversations((cs) => cs.map((c) =>
-        c.id === cid ? { ...c, preview: data.content || '' } : c
+        c.id === cid ? { ...c, preview: data.content || '', title: data.title || c.title } : c
       ))
     } catch (e) {
       setErr(e.message)

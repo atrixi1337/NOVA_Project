@@ -1183,6 +1183,13 @@ def db_get_conversation(cid: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def db_get_conversation_title(cid: str) -> Optional[str]:
+    conn = _db()
+    row = conn.execute("SELECT title FROM conversations WHERE id = ?", (cid,)).fetchone()
+    conn.close()
+    return row["title"] if row else None
+
+
 def db_update_conversation_title(cid: str, title: str) -> bool:
     conn = _db()
     cur = conn.execute("UPDATE conversations SET title = ? WHERE id = ?", (title, cid))
@@ -1620,6 +1627,7 @@ async def chat(req: ChatRequest):
             "usage": data.get("usage"),
             "trace": trace,
             "agent": True,
+            "title": db_get_conversation_title(req.conversation_id) if req.conversation_id else None,
         })
     else:
         data = await call_llm(messages, model, api_key, provider, None, eff)
@@ -1645,6 +1653,7 @@ async def chat(req: ChatRequest):
             "usage": data.get("usage"),
             "trace": [],
             "agent": False,
+            "title": db_get_conversation_title(req.conversation_id) if req.conversation_id else None,
         })
 
 

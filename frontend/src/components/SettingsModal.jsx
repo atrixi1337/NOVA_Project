@@ -255,14 +255,6 @@ export default function SettingsModal({
                 </span>
               </label>
             </div>
-            <p className="text-[11px] text-muted/60">
-              Prepends a cybersecurity-expert system instruction (threat modeling,
-              vuln triage, pentest methodology/reporting, CTF, log/SIEM, secure-code
-              review — authorized lab use only). Works with any provider; cloud
-              providers still apply their own safety filters. For fully unrestricted
-              content, run Local Ollama on a machine with enough VRAM — not feasible on
-              this phone.
-            </p>
           </div>
 
           {/* ── Ollama ── */}
