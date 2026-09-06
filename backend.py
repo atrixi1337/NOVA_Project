@@ -15,6 +15,8 @@ import logging
 import os
 import io
 import base64
+import hashlib
+import hmac
 import sqlite3
 import uuid
 import xml.etree.ElementTree as ET
@@ -24,8 +26,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("nova_poc")
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -834,12 +835,104 @@ class ChatRequest(BaseModel):
 # App
 # ----------------------------------------------------------------------------
 app = FastAPI(title="AI POC", version="2.0.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The SPA is served same-origin by this app, so cross-origin requests are not
+# needed by the UI — the old allow-all CORS only helped strangers' pages call
+# the API with our cookies/keys. (Use a dev proxy if you ever need CORS.)
+
+# ---- shared-passphrase auth -------------------------------------------------
+# Set NOVA_AUTH_PASSPHRASE in .env to lock /api/* behind one shared secret:
+#   NOVA_AUTH_PASSPHRASE=owner:amber-fjord-42,alex:lime-canoe-77
+# (a single bare value also works and is named "owner"). Unset = auth disabled.
+# Browsers log in once via /api/auth/login and get a signed 30-day HttpOnly
+# cookie; scripts can send a secret as the X-Nova-Token header instead. The
+# token NAME travels with each request as request.state.actor and is recorded
+# in the usage ledger, so shared deployments still show who burned what.
+# /api/health and /api/auth/login stay public (uptime pings + the lock screen).
+AUTH_TOKENS: Dict[str, str] = {}
+for _part in os.getenv("NOVA_AUTH_PASSPHRASE", "").split(","):
+    _part = _part.strip()
+    if not _part:
+        continue
+    if ":" in _part:
+        _name, _secret = _part.split(":", 1)
+        AUTH_TOKENS[_secret.strip()] = (_name.strip() or "guest")
+    else:
+        AUTH_TOKENS[_part] = "owner"
+AUTH_SECRET = os.getenv("NOVA_AUTH_SECRET", "").strip() or next(iter(AUTH_TOKENS), "")
+AUTH_COOKIE = "nova_session"
+AUTH_TTL_S = 30 * 86400
+_LOGIN_FAILS: Dict[str, List[float]] = {}
+
+
+def _auth_enabled() -> bool:
+    return bool(AUTH_TOKENS)
+
+
+def _make_session_token(actor: str) -> str:
+    exp = str(int(time.time()) + AUTH_TTL_S)
+    sig = hmac.new(AUTH_SECRET.encode(), f"{exp}.{actor}".encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{exp}.{actor}.{sig}"
+
+
+def _valid_session(token: str) -> Optional[str]:
+    """Return the actor name for a valid unexpired token, else None."""
+    try:
+        exp_s, actor, sig = token.split(".", 2)
+        if not actor or int(exp_s) < time.time():
+            return None
+        want = hmac.new(AUTH_SECRET.encode(), f"{exp_s}.{actor}".encode(), hashlib.sha256).hexdigest()[:32]
+        return actor if hmac.compare_digest(sig, want) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if _auth_enabled() and request.url.path.startswith("/api/"):
+        if request.url.path not in ("/api/auth/login", "/api/health"):
+            actor = None
+            cookie = request.cookies.get(AUTH_COOKIE, "")
+            if cookie:
+                actor = _valid_session(cookie)
+            if actor is None:
+                header = request.headers.get("x-nova-token", "").strip()
+                if header:
+                    actor = AUTH_TOKENS.get(header)
+            if actor is None:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Locked. Enter the passphrase to unlock."},
+                )
+            request.state.actor = actor
+    return await call_next(request)
+
+
+class AuthLogin(BaseModel):
+    passphrase: str = ""
+
+
+@app.post("/api/auth/login")
+async def auth_login(login: AuthLogin, request: Request, response: Response):
+    """Exchange the shared passphrase for a signed 30-day session cookie."""
+    if not _auth_enabled():
+        return {"ok": True, "auth_required": False}
+    ip = request.client.host if request.client else "?"
+    now = time.time()
+    fails = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < 60]
+    if len(fails) >= 5:
+        raise HTTPException(429, "Too many attempts — wait a minute and try again.")
+    actor = AUTH_TOKENS.get(login.passphrase.strip())
+    if actor is None:
+        fails.append(now)
+        _LOGIN_FAILS[ip] = fails
+        raise HTTPException(401, "Wrong passphrase.")
+    _LOGIN_FAILS.pop(ip, None)
+    response.set_cookie(
+        AUTH_COOKIE, _make_session_token(actor),
+        max_age=AUTH_TTL_S, httponly=True, samesite="lax",
+    )
+    return {"ok": True, "auth_required": True, "actor": actor}
+
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -1296,6 +1389,12 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_ledger(created_at DESC);
         """
     )
+    # Lightweight migration for the named-auth feature: attribute usage rows to
+    # the actor (the token name from NOVA_AUTH_PASSPHRASE) that caused them.
+    try:
+        conn.execute("ALTER TABLE usage_ledger ADD COLUMN actor TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.commit()
     conn.close()
 
@@ -1420,7 +1519,7 @@ def _coerce_content(content) -> str:
 def db_save_message(
     cid: str, role: str, content: Optional[str], model: Optional[str],
     provider: Optional[str], reasoning: Optional[str] = None,
-    usage: Optional[Dict] = None,
+    usage: Optional[Dict] = None, actor: Optional[str] = None,
 ) -> None:
     """Append a message to a conversation; auto-generate a title from the
     first user message if the conversation still has its default title."""
@@ -1442,12 +1541,12 @@ def db_save_message(
             """INSERT INTO usage_ledger
                (conversation_id, role, provider, model,
                 prompt_tokens, completion_tokens, total_tokens,
-                reasoning_tokens, raw_usage, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                reasoning_tokens, raw_usage, created_at, actor)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (cid, role, provider or "", model or "",
              u.get("prompt_tokens"), u.get("completion_tokens"), u.get("total_tokens"),
              u.get("reasoning_tokens") or u.get("thinking_tokens") or u.get("reasoning_output_tokens"),
-             json.dumps(u), now),
+             json.dumps(u), now, actor or ""),
         )
     # Touch the conversation's updated_at.
     conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
@@ -1525,6 +1624,17 @@ def db_usage_summary(provider: Optional[str] = None, model: Optional[str] = None
            LIMIT 90""",
         params,
     ).fetchall()
+    by_actor = conn.execute(
+        f"""SELECT COALESCE(NULLIF(actor, ''), 'unknown'),
+                  COALESCE(SUM(prompt_tokens),0),
+                  COALESCE(SUM(completion_tokens),0),
+                  COALESCE(SUM(total_tokens),0),
+                  COUNT(*)
+           FROM usage_ledger {clause}
+           GROUP BY 1
+           ORDER BY 4 DESC""",
+        params,
+    ).fetchall()
     first_seen = conn.execute("SELECT MIN(created_at) FROM usage_ledger").fetchone()[0]
     conn.close()
     return {
@@ -1545,6 +1655,11 @@ def db_usage_summary(provider: Optional[str] = None, model: Optional[str] = None
              "total_tokens": r[3], "calls": r[4]}
             for r in by_day
         ],
+        "by_actor": [
+            {"actor": r[0], "prompt_tokens": r[1], "completion_tokens": r[2],
+             "total_tokens": r[3], "calls": r[4]}
+            for r in by_actor
+        ],
         "first_seen": first_seen,
     }
 
@@ -1554,7 +1669,7 @@ def db_usage_recent(limit: int = 50) -> List[Dict[str, Any]]:
     conn = _db()
     rows = conn.execute(
         """SELECT provider, model, role, prompt_tokens, completion_tokens,
-                  total_tokens, reasoning_tokens, created_at
+                  total_tokens, reasoning_tokens, created_at, actor
            FROM usage_ledger
            ORDER BY id DESC
            LIMIT ?""",
@@ -1564,7 +1679,7 @@ def db_usage_recent(limit: int = 50) -> List[Dict[str, Any]]:
     return [
         {"provider": r[0], "model": r[1], "role": r[2], "prompt_tokens": r[3],
          "completion_tokens": r[4], "total_tokens": r[5], "reasoning_tokens": r[6],
-         "created_at": r[7]}
+         "created_at": r[7], "actor": r[8]}
         for r in rows
     ]
 
@@ -1721,8 +1836,9 @@ def _prepare_chat(req: ChatRequest):
 
 
 @app.post("/api/chat")
-async def chat(req: ChatRequest):
+async def chat(request: Request, req: ChatRequest):
     provider, api_key, messages, model = _prepare_chat(req)
+    actor = getattr(request.state, "actor", "") or ""
     trace: List[Dict[str, Any]] = []
     eff = (req.reasoning_effort or "").strip().lower() or None
 
@@ -1814,11 +1930,13 @@ async def chat(req: ChatRequest):
                 req.conversation_id, "user",
                 last_user_msg.get("content"),
                 last_user_msg.get("model"), last_user_msg.get("provider"),
+                actor=actor,
             )
             db_save_message(
                 req.conversation_id, "assistant",
                 final_msg.get("content", ""), model, provider,
                 grab_reasoning(data), data.get("usage"),
+                actor=actor,
             )
         return JSONResponse({
             "id": data.get("id"),
@@ -1840,11 +1958,13 @@ async def chat(req: ChatRequest):
                 req.conversation_id, "user",
                 last_user_msg.get("content"),
                 last_user_msg.get("model"), last_user_msg.get("provider"),
+                actor=actor,
             )
             db_save_message(
                 req.conversation_id, "assistant",
                 msg.get("content", ""), model, provider,
                 grab_reasoning(data), data.get("usage"),
+                actor=actor,
             )
         return JSONResponse({
             "id": data.get("id"),
@@ -1868,8 +1988,9 @@ def _sse(obj: Dict[str, Any]) -> str:
 
 
 @app.post("/api/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(request: Request, req: ChatRequest):
     provider, api_key, messages, model = _prepare_chat(req)
+    actor = getattr(request.state, "actor", "") or ""
     if req.agent:
         raise HTTPException(
             status_code=400,
@@ -1960,9 +2081,11 @@ async def chat_stream(req: ChatRequest):
                         db_save_message(
                             req.conversation_id, "user", m.get("content"),
                             m.get("model"), m.get("provider"),
+                            actor=actor,
                         )
                         break
-                db_save_message(req.conversation_id, "assistant", content, model, provider, reasoning, usage)
+                db_save_message(req.conversation_id, "assistant", content, model, provider,
+                                reasoning, usage, actor=actor)
                 title = db_get_conversation_title(req.conversation_id)
             yield _sse({
                 "type": "done", "content": content, "reasoning": reasoning,

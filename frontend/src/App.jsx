@@ -11,6 +11,7 @@ import UsageDashboard from './components/UsageDashboard.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
 import Arena from './components/Arena.jsx'
+import LockScreen from './components/LockScreen.jsx'
 import { composePersonaMessages } from './personas.js'
 import { Sparkle, AttachmentPaperclip, Remove, SendSolid, Shield, ArrowDown } from './components/Icons.jsx'
 
@@ -132,6 +133,11 @@ export default function App() {
   })
   const [health, setHealth] = useState(null)
 
+  // Shared-passphrase auth: the API 401s until this browser logs in once.
+  const [locked, setLocked] = useState(false)
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authErr, setAuthErr] = useState('')
+
   // UI state: drag-over highlight, thinking elapsed seconds, scroll-follow,
   // command palette, textarea auto-grow.
   const [dragOver, setDragOver] = useState(false)
@@ -236,6 +242,7 @@ export default function App() {
       try { setHealth(await api.health()) } catch {}
       loadConversations()
     } catch (e) {
+      if (e?.name === 'AuthError') setLocked(true)
       loadConversations()
     }
   }
@@ -246,7 +253,8 @@ export default function App() {
       const data = await api.conversations()
       setConversations(data.conversations || [])
     } catch (e) {
-      console.error('Failed to load conversations', e)
+      if (e?.name === 'AuthError') setLocked(true)
+      else console.error('Failed to load conversations', e)
     } finally {
       setConversationsLoaded(true)
     }
@@ -408,6 +416,11 @@ export default function App() {
             setBusy(false)
             abortRef.current = null
           },
+          onAuthRequired: () => {
+            setLocked(true)
+            setBusy(false)
+            abortRef.current = null
+          },
           onError: (msg) => {
             setErr(msg)
             setMessages(acc ? [...next, { role: 'assistant', content: acc }] : next)
@@ -436,6 +449,7 @@ export default function App() {
       setLastMeta((m) => ({ ...m, trace: data.trace || [] }))
     } catch (e) {
       if (e?.name === 'AbortError') setMessages(next)
+      else if (e?.name === 'AuthError') setLocked(true)
       else setErr(e.message)
     } finally {
       setBusy(false)
@@ -445,6 +459,21 @@ export default function App() {
 
   const stopGenerating = () => {
     abortRef.current?.abort()
+  }
+
+  // Exchange the passphrase for the 30-day cookie, then boot the app data.
+  const doLogin = async (passphrase) => {
+    setAuthBusy(true)
+    setAuthErr('')
+    try {
+      await api.login(passphrase)
+      setLocked(false)
+      loadModels()
+    } catch (e) {
+      setAuthErr(e.message || 'Login failed')
+    } finally {
+      setAuthBusy(false)
+    }
   }
 
   const onKeyDownInput = (e) => {
@@ -488,6 +517,15 @@ export default function App() {
   const displayModel = activeModel === 'auto' || !activeModel
     ? (providers[activeProvider]?.default || '')
     : activeModel
+
+  // Lock gate: render only the passphrase prompt until the API lets us in.
+  if (locked) {
+    return (
+      <div className="h-[100dvh] bg-bg text-text font-sans overflow-hidden flex items-center justify-center">
+        <LockScreen onUnlock={doLogin} busy={authBusy} error={authErr} />
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-[100dvh] bg-bg text-text font-sans overflow-hidden">

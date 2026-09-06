@@ -33,6 +33,7 @@ export default function UsageDashboard() {
   const models = data?.by_model || []
   const providers = data?.by_provider || []
   const byDay = data?.by_day || []
+  const actors = data?.by_actor || []
   const recent = data?.recent || []
 
   return (
@@ -111,6 +112,20 @@ export default function UsageDashboard() {
           />
         </Card>
       </div>
+
+      {/* Per-person attribution (named auth tokens record who caused usage) */}
+      {actors.length > 0 && (
+        <Card title="By person" icon={<Clock className="w-4 h-4 text-accent2" />}>
+          <Table
+            cols={['Actor', 'Prompt', 'Completion', 'Total', 'Calls']}
+            rows={actors.map((a) => [
+              lab(a.actor), fmtTok(a.prompt_tokens), fmtTok(a.completion_tokens),
+              fmtTok(a.total_tokens), fmt(a.calls),
+            ])}
+            empty="No usage recorded yet."
+          />
+        </Card>
+      )}
 
       <div className="text-[11px] text-muted/60">
         Usage is persisted for the lifetime of the app in the phone's local SQLite

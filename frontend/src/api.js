@@ -3,9 +3,20 @@
 
 const BASE = ''  // same origin (FastAPI serves this built frontend)
 
+// Thrown by every helper when the API answers 401 — App shows the lock screen.
+export class AuthError extends Error {
+  constructor(msg) { super(msg); this.name = 'AuthError' }
+}
+
+async function toError(r, fallback) {
+  let detail = fallback
+  try { const d = await r.json(); detail = d.detail || detail } catch {}
+  return r.status === 401 ? new AuthError(detail) : new Error(detail)
+}
+
 async function jget(path) {
   const r = await fetch(BASE + path, { headers: { Accept: 'application/json' } })
-  if (!r.ok) throw new Error(`GET ${path} -> ${r.status}`)
+  if (!r.ok) throw await toError(r, `GET ${path} -> ${r.status}`)
   return r.json()
 }
 
@@ -16,11 +27,7 @@ async function jpost(path, body, opts = {}) {
     body: JSON.stringify(body),
     ...(opts.extra || {}),
   })
-  if (!r.ok) {
-    let detail = `POST ${path} -> ${r.status}`
-    try { const d = await r.json(); detail = d.detail || detail } catch {}
-    throw new Error(detail)
-  }
+  if (!r.ok) throw await toError(r, `POST ${path} -> ${r.status}`)
   return r.json()
 }
 
@@ -30,21 +37,13 @@ async function jput(path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body || {}),
   })
-  if (!r.ok) {
-    let detail = `PUT ${path} -> ${r.status}`
-    try { const d = await r.json(); detail = d.detail || detail } catch {}
-    throw new Error(detail)
-  }
+  if (!r.ok) throw await toError(r, `PUT ${path} -> ${r.status}`)
   return r.json()
 }
 
 async function jdel(path) {
   const r = await fetch(BASE + path, { method: 'DELETE' })
-  if (!r.ok) {
-    let detail = `DELETE ${path} -> ${r.status}`
-    try { const d = await r.json(); detail = d.detail || detail } catch {}
-    throw new Error(detail)
-  }
+  if (!r.ok) throw await toError(r, `DELETE ${path} -> ${r.status}`)
   return r.json()
 }
 
@@ -52,6 +51,17 @@ export const api = {
   // models / providers
   models: () => jget('/api/models'),
   health: () => jget('/api/health'),
+
+  // shared-passphrase auth: exchange the passphrase for a 30-day cookie
+  login: async (passphrase) => {
+    const r = await fetch(BASE + '/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passphrase }),
+    })
+    if (!r.ok) throw await toError(r, `login -> ${r.status}`)
+    return r.json()
+  },
 
   // Usage dashboard: aggregate token usage from the local usage_ledger.
   // Optional filters: ?provider=.. &model=.. &days=N &recent=1
@@ -81,6 +91,7 @@ export const api = {
         signal,
       })
       if (!r.ok || !r.body) {
+        if (r.status === 401) { handlers.onAuthRequired?.(); return }
         let detail = `POST /api/chat/stream -> ${r.status}`
         try { const d = await r.json(); detail = d.detail || detail } catch {}
         throw new Error(detail)
