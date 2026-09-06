@@ -373,6 +373,10 @@ REQUESTY_MODELS = [
 ANALYZE_MAX_CHARS = int(os.getenv("NOVA_ANALYZE_MAX_CHARS", "60000"))
 NOVA_MAX_UPLOAD_MB = int(os.getenv("NOVA_MAX_UPLOAD_MB", "10"))
 
+# you.com Web Search API key (optional): upgrades tool_web_search from DuckDuckGo
+# scraping to the cleaner you.com results API. Get one at you.com/home/api-key.
+YOU_API_KEY = os.getenv("YOU_API_KEY", "").strip()
+
 # SQLite database for chat history (file-based, zero-dependency persistence).
 # A persistent volume or bind-mount can hold this file across container restarts.
 HISTORY_DB = os.getenv("NOVA_HISTORY_DB", str(Path(__file__).parent / "nova_history.db"))
@@ -712,6 +716,31 @@ def _ddg_decode_url(href: str) -> str:
 
 def tool_web_search(query: str, max_results: int = 5) -> str:
     max_results = max(1, min(max_results, 8))
+    # Preferred backend: you.com Web Search API (clean JSON, no scraping) when
+    # YOU_API_KEY is configured; DuckDuckGo HTML otherwise (free, no key).
+    if YOU_API_KEY:
+        try:
+            r = httpx.get(
+                "https://api.ydc-index.io/search",
+                params={"query": query, "num_web_results": max_results},
+                headers={"X-API-Key": YOU_API_KEY},
+                timeout=15.0,
+            )
+            if r.status_code == 200:
+                hits = (r.json() or {}).get("hits") or []
+                out: List[str] = []
+                for i, h in enumerate(hits[:max_results]):
+                    title = (h.get("title") or "").strip()
+                    url = h.get("url") or ""
+                    desc = " ".join(h.get("snippets") or []) or (h.get("description") or "")
+                    out.append(f"{i + 1}. {title}\n   {url}" + (f"\n   {desc[:280]}" if desc else ""))
+                if out:
+                    return "\n".join(out)
+                return "you.com returned no results for that query."
+            logger.warning("you.com search HTTP %s — falling back to DuckDuckGo", r.status_code)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("you.com search failed (%s) — falling back to DuckDuckGo", e)
+
     try:
         r = httpx.post(
             "https://html.duckduckgo.com/html/",
@@ -1115,6 +1144,17 @@ async def call_llm(
                 last_err = f"{provider} gateway {resp.status_code} (transient)"
                 logger.warning("%s — retrying", last_err)
                 continue
+
+            # Some models/endpoints reject the tools parameter outright (400).
+            # Web search must degrade gracefully: strip tools and retry, so the
+            # model simply answers from its own knowledge instead of erroring.
+            if resp.status_code == 400 and payload.get("tools"):
+                err_txt = (resp.text or "").lower()
+                if "tool" in err_txt or "function" in err_txt:
+                    payload = {k: v for k, v in payload.items() if k not in ("tools", "tool_choice")}
+                    last_err = f"{provider} rejected tools (400) — retrying without them"
+                    logger.warning("%s", last_err)
+                    continue
 
             # Any non-2xx: surface a clean message and raise. IFM K2 Horizon can
             # intermittently 400 "missing a thinking field" under rapid calls
@@ -2017,6 +2057,17 @@ async def chat(request: Request, req: ChatRequest):
                 trace.append({"type": "usage", "data": data["usage"]})
         else:
             final_msg = data["choices"][0]["message"]
+        # Gemini occasionally returns an EMPTY message right after tool results
+        # (content:"" with no tool_calls). Nudge once so the user gets the
+        # answer the tools were fetched for instead of a blank reply.
+        if used_tools and not (final_msg.get("content") or "").strip():
+            messages.append({"role": "user", "content":
+                             "Answer now using the tool results above. Do not call more tools."})
+            data = await call_llm(messages, model, api_key, provider, None, eff)
+            final_msg = data["choices"][0]["message"]
+            messages.append(final_msg)
+            if "usage" in data:
+                trace.append({"type": "usage", "data": data["usage"]})
         # Persist to chat history if a conversation id was supplied.
         if save_history and last_user_msg:
             db_save_message(

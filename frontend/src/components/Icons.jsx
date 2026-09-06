@@ -100,6 +100,9 @@ export const ArrowDown = svg(
   'M12 5v14m7-7l-7 7-7-7',
   { strokeWidth: 2 },
 )
+export const Globe = svg(
+  'M12 21a9 9 0 100-18 9 9 0 000 18zM3.6 9h16.8M3.6 15h16.8M12 3a13.5 13.5 0 010 18M12 3a13.5 13.5 0 000 18'
+)
 export const Refresh = svg(
   'M21 12a9 9 0 11-2.64-6.36M21 3v6h-6',
   { strokeWidth: 2 },

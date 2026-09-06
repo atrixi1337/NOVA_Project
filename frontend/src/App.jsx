@@ -13,7 +13,7 @@ import CommandPalette from './components/CommandPalette.jsx'
 import Arena from './components/Arena.jsx'
 import LockScreen from './components/LockScreen.jsx'
 import { composePersonaMessages } from './personas.js'
-import { Sparkle, AttachmentPaperclip, Remove, SendSolid, Shield, ArrowDown } from './components/Icons.jsx'
+import { Sparkle, AttachmentPaperclip, Remove, SendSolid, Shield, ArrowDown, Globe } from './components/Icons.jsx'
 
 // Persona system prompts (Malayalam "grumpy uncle" / NovaSec) live in
 // personas.js — shared between the chat and the Arena tab.
@@ -78,6 +78,12 @@ export default function App() {
       const t = localStorage.getItem('nova_tools_preset')
       return ['core', 'research', 'security'].includes(t) ? t : 'research'
     } catch { return 'research' }
+  })
+  // Web search toggle: gives the model the research tools in normal chat by
+  // running a mini tool loop (search → answer, 2 rounds max). Needs a model
+  // with function calling; unsupported models just answer without searching.
+  const [webSearch, setWebSearch] = useState(() => {
+    try { return localStorage.getItem('nova_web_search') === 'true' } catch { return false }
   })
   const [ollama, setOllama] = useState({ loaded: false, model: '' })
   const [ollamaBusy, setOllamaBusy] = useState(false)
@@ -165,6 +171,9 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('nova_tools_preset', String(toolsPreset)) } catch {}
   }, [toolsPreset])
+  useEffect(() => {
+    try { localStorage.setItem('nova_web_search', String(webSearch)) } catch {}
+  }, [webSearch])
 
   // Keep the browser tab title in sync with the open conversation.
   useEffect(() => {
@@ -348,18 +357,22 @@ export default function App() {
     setAtBottom(true)
     const assistantIdx = baseMessages.length
     setMessages([...baseMessages, { role: 'assistant', content: '' }])
+    // Web toggle = same tool loop as agent mode, capped at 2 rounds
+    // (search → answer). NovaSec upgrades the preset to Recon.
+    const useAgent = agent || webSearch
     // Personas compose as a per-request system message (Malayalam takes
     // precedence and routes to Gemini); the backend forwards them verbatim.
     const payload = {
       messages: composePersonaMessages(baseMessages, { malayalamMode, securityMode }),
       model: activeModel,
-      agent,
+      agent: useAgent,
       provider: activeProvider,
       reasoning_effort: reasoningEffort || undefined,
       conversation_id: cid,
       api_key: getUIKey(activeProvider) || undefined,
+      max_tool_rounds: useAgent && !agent ? 2 : undefined,
       // Persona-aware agent tools (NovaSec → recon set with the HTTP header probe).
-      tools_preset: agent ? (securityMode ? 'security' : toolsPreset) : undefined,
+      tools_preset: useAgent ? (securityMode ? 'security' : (agent ? toolsPreset : 'research')) : undefined,
       regenerate: regenerate || undefined,
     }
     const finalizeMeta = (ev) => {
@@ -394,7 +407,7 @@ export default function App() {
       streamBufRef.current.timer = setTimeout(flushLive, 80)
     }
 
-    if (!agent) {
+    if (!useAgent) {
       // Streaming path: token-by-token into a live assistant bubble, with the
       // model's reasoning streaming into a live "Thinking…" panel. The Stop
       // button aborts the fetch, which cancels the server-side generator
@@ -409,7 +422,12 @@ export default function App() {
           onDone: (ev) => {
             clearStreamBuf()
             setLiveReasoning('')
-            setMessages([...baseMessages, { role: 'assistant', content: ev.content ?? '', reasoning: ev.reasoning }])
+            // Empty post-tool replies (a Gemini quirk) shouldn't render as a
+            // silent bubble — nudge text pairs with the backend's retry.
+            const finalContent = (ev.content || '').trim()
+              ? ev.content
+              : '(the model returned an empty reply — tap retry)'
+            setMessages([...baseMessages, { role: 'assistant', content: finalContent, reasoning: ev.reasoning }])
             finalizeMeta(ev)
             setBusy(false)
             abortRef.current = null
@@ -455,7 +473,16 @@ export default function App() {
     } catch (e) {
       if (e?.name === 'AbortError') setMessages(baseMessages)
       else if (e?.name === 'AuthError') setLocked(true)
-      else setErr(e.message)
+      else {
+        setErr(e.message)
+        // drop the empty assistant placeholder on failure so no orphan
+        // "…thinking" bubble lingers after an error
+        setMessages((prev) => (
+          prev.length - 1 === assistantIdx && !(prev[assistantIdx]?.content || '').trim()
+            ? prev.slice(0, -1)
+            : prev
+        ))
+      }
     } finally {
       setBusy(false)
       abortRef.current = null
@@ -789,6 +816,15 @@ export default function App() {
                     }`}
                   >
                     അ Malayalam
+                  </button>
+                  <button
+                    onClick={() => setWebSearch((w) => !w)}
+                    title="Let the model search the web (needs a function-calling model; others just answer without it)"
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] transition-colors ${
+                      webSearch ? 'bg-accent2/15 text-accent2 border-accent2/40' : 'bg-panel2 text-muted border-border hover:text-text'
+                    }`}
+                  >
+                    <Globe className="w-3 h-3" /> Web
                   </button>
                   {malayalamMode && <span className="text-[10px] text-muted/70">→ gemini</span>}
                 </div>

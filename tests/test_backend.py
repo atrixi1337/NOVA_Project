@@ -176,6 +176,71 @@ def test_stream_rejects_agent_mode(client):
     assert r.status_code == 400
 
 
+def test_call_llm_retries_without_tools_on_tool_400(monkeypatch):
+    """Models that reject the tools parameter get a clean retry without them
+    (web search degrades to a normal answer instead of erroring)."""
+    import asyncio
+    import httpx
+
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        has_tools = "tools" in body
+        seen.append(has_tools)
+        if has_tools:
+            return httpx.Response(400, json={"error": {"message": "tools is not supported by this model"}})
+        return httpx.Response(200, json=fake_llm_response("answered without tools"))
+
+    real_client = backend.httpx.AsyncClient
+
+    def patched_client(**kw):
+        kw["transport"] = httpx.MockTransport(handler)
+        return real_client(**kw)
+
+    monkeypatch.setattr(backend.httpx, "AsyncClient", patched_client)
+
+    resp = asyncio.run(backend.call_llm(
+        [{"role": "user", "content": "search something"}],
+        "test-model", "k", "gemini", backend.TOOLS, None,
+    ))
+    assert resp["choices"][0]["message"]["content"] == "answered without tools"
+    assert seen == [True, False]  # first with tools, then without
+
+
+def test_empty_reply_after_tools_triggers_nudge(monkeypatch, client):
+    """Gemini quirk: empty message right after tool results must trigger one
+    nudge pass so the user gets the actual answer, not a blank bubble."""
+    seq = [
+        # round 1: model calls get_time
+        {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "get_time", "arguments": "{}"}},
+        ]}}], "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}},
+        # round 2: model returns EMPTY content after the tool result
+        {"choices": [{"message": {"role": "assistant", "content": ""}}], "usage": {}},
+        # nudge pass: model finally answers
+        {"choices": [{"message": {"role": "assistant", "content": "the actual answer"}}],
+         "usage": {"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12}},
+    ]
+    calls = []
+
+    async def fake_llm(messages, model, api_key, provider="nova", tools=None, reasoning_effort=None):
+        calls.append([dict(m) for m in messages])
+        return seq[min(len(calls) - 1, len(seq) - 1)]
+
+    monkeypatch.setattr(backend, "call_llm", fake_llm)
+    cid = make_conversation(client)
+    r = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "what time is it?"}],
+        "conversation_id": cid, "agent": True, "max_tool_rounds": 3,
+    })
+    assert r.status_code == 200
+    assert r.json()["content"] == "the actual answer"
+    assert len(calls) == 3
+    # the nudge message is the last user turn of the final call
+    assert calls[2][-1]["content"].startswith("Answer now")
+
+
 # ---------------------------------------------------------------------------
 # usage ledger + actor attribution + pagination
 # ---------------------------------------------------------------------------
