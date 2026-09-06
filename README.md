@@ -39,6 +39,10 @@ columns with latency, token counts and a "⚡ first" badge. Ephemeral by design
   as a grumpy old Malayali uncle.
 - **NovaSec** — cybersecurity-expert persona (bounded to authorized security
   work) that also auto-selects the **Recon** agent-tool preset.
+- **🌐 Web toggle** — gives normal chat a 2-round search loop (search → answer).
+  While on, the default model switches to a function-calling one
+  (Amazon Nova `nova-2-lite-v1`) until you explicitly pick a provider; models
+  without function calling automatically degrade to answering without search.
 
 **Agent mode** — safe local + web tools with named presets
 (`NOVA_… ChatRequest.tools_preset`):

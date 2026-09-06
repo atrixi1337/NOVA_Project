@@ -85,6 +85,9 @@ export default function App() {
   const [webSearch, setWebSearch] = useState(() => {
     try { return localStorage.getItem('nova_web_search') === 'true' } catch { return false }
   })
+  // Web mode swaps the default to a function-calling model (Nova nova-2-lite-v1)
+  // until the user explicitly picks a provider themselves.
+  const [providerTouched, setProviderTouched] = useState(false)
   const [ollama, setOllama] = useState({ loaded: false, model: '' })
   const [ollamaBusy, setOllamaBusy] = useState(false)
 
@@ -581,6 +584,7 @@ export default function App() {
   const switchProvider = useCallback((pid) => {
     if (!providers[pid]) return
     setProvider(pid)
+    setProviderTouched(true) // explicit choice wins over the web-mode default
     setModel('auto') // let the new provider apply its default model
   }, [providers])
 
@@ -604,10 +608,15 @@ export default function App() {
   }, [conversations, providers, securityMode, malayalamMode, startNewChat, openConversation, switchProvider])
 
   // ── provider/model label for header display ──
-  // In Malayalam mode the chat is routed through the Gemini provider (multilingual,
-  // strong Malayalam), so the header reflects that effective provider/model.
-  const activeProvider = malayalamMode ? 'gemini' : provider
-  const activeModel = malayalamMode ? 'auto' : model
+  // Precedence: Malayalam mode routes through Gemini (multilingual, strong
+  // Malayalam); Web mode swaps the default to a function-calling model
+  // (Nova nova-2-lite-v1) until the user explicitly picks a provider.
+  const activeProvider = malayalamMode
+    ? 'gemini'
+    : (webSearch && !providerTouched ? 'nova' : provider)
+  const activeModel = malayalamMode
+    ? 'auto'
+    : (webSearch && !providerTouched ? 'auto' : model)
   const providerLabel = (providers[activeProvider]?.label || activeProvider) || 'Sallaapam'
   const displayModel = activeModel === 'auto' || !activeModel
     ? (providers[activeProvider]?.default || '')
@@ -945,7 +954,7 @@ export default function App() {
         defaultProvider={defaultProvider}
         provider={activeProvider}
         model={activeModel}
-        setProvider={setProvider}
+        setProvider={(pid) => { setProvider(pid); setProviderTouched(true) }}
         setModel={setModel}
         agent={agent}
         setAgent={setAgent}
