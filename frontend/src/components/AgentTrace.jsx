@@ -1,4 +1,5 @@
 import React from 'react'
+import { ToolTrace, ChevronDown } from './Icons.jsx'
 
 // Agent tool-trace panel: shows assistant turns, tool calls + results, usage.
 export default function AgentTrace({ trace = [] }) {
@@ -7,8 +8,9 @@ export default function AgentTrace({ trace = [] }) {
   return (
     <details className="collapsible mt-3 rounded-xl border border-border bg-panel2/50">
       <summary className="px-3 py-2 text-sm font-medium text-accent2 cursor-pointer flex items-center gap-2">
-        <span>🛠</span>
+        <ToolTrace className="w-4 h-4" />
         <span>Tool trace ({toolCount} calls)</span>
+        <ChevronDown className="w-4 h-4 ml-auto summary-chevron" />
       </summary>
       <div className="px-3 pb-3 space-y-2">
         {trace.map((t, i) => {

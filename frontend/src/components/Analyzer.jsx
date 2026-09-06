@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { api } from '../api.js'
 import { renderMarkdown } from '../markdown.jsx'
+import { ChartBar } from './Icons.jsx'
 
 export default function Analyzer({ provider, model, reasoningEffort }) {
   const [file, setFile] = useState(null)
@@ -67,7 +68,9 @@ export default function Analyzer({ provider, model, reasoningEffort }) {
       {stats && (
         <div className="rounded-xl border border-border bg-panel2 p-4 text-[13px] space-y-3">
           <div className="font-semibold text-text text-[14px] flex items-center gap-2">
-            <span className="w-5 h-5 rounded bg-panel flex items-center justify-center text-accent2">📊</span>
+            <span className="w-5 h-5 rounded bg-panel flex items-center justify-center text-accent2">
+              <ChartBar className="w-4 h-4" />
+            </span>
             Pre-analysis stats (server-side)
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-muted">

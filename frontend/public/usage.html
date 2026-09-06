@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sallaapam — Token Usage</title>
+  <link rel="icon" href="./logo.png" />
+  <style>
+    :root {
+      --bg: #0d1116; --panel: #151a22; --panel2: #1d232b; --border: #30363d;
+      --text: #e6edf3; --muted: #9da9b5; --accent: #58a6ff; --accent2: #7ee787;
+      --warn: #ffd86b;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "IBM Plex Mono", ui-monospace, monospace;
+           background: var(--bg); color: var(--text); min-height: 100vh; }
+    a { color: var(--accent); }
+    header { padding: 18px 22px; border-bottom: 1px solid var(--border);
+             background: var(--panel); position: sticky; top: 0; z-index: 5; }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    header .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    main { max-width: 1180px; margin: 0 auto; padding: 20px 22px 48px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+             gap: 12px; margin-bottom: 22px; }
+    .card { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+            padding: 14px 14px; }
+    .card .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+                 color: var(--muted); }
+    .card .val { font-size: 24px; font-weight: 600; margin-top: 4px; }
+    .card .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    section { background: var(--panel2); border: 1px solid var(--border); border-radius: 12px;
+              padding: 16px; margin-bottom: 20px; overflow-x: auto; }
+    section h2 { margin: 0 0 12px; font-size: 15px; }
+    table { border-collapse: collapse; width: 100%; font-size: 12.5px; min-width: 460px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border);
+             white-space: nowrap; }
+    th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .bar { height: 10px; background: var(--accent); border-radius: 5px; }
+    .bar-wrap { width: 100%; min-width: 80px; }
+    .bar-wrap > div { background: var(--accent2); }
+    .empty { color: var(--muted); padding: 18px; text-align: center; font-size: 13px; }
+    footer { color: var(--muted); font-size: 11px; padding-top: 6px; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px;
+            background: var(--panel); border:1px solid var(--border); }
+    .err { color: var(--warn); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Token Usage &middot; lifetime ledger</h1>
+    <div class="sub">Persists across chat clears &amp; deletes &middot; auto-refresh 30s &middot;
+      <a href="/mobile">mobile</a> &middot; <a href="/">chat</a></div>
+  </header>
+  <main id="app">
+    <div class="err" id="err"></div>
+    <div class="cards" id="cards"></div>
+    <section id="sec-model"><h2>By model</h2><table id="t-model"><thead></thead><tbody></tbody></table></section>
+    <section id="sec-prov"><h2>By provider</h2><table id="t-prov"><thead></thead><tbody></tbody></table></section>
+    <section id="sec-day"><h2>By day</h2><table id="t-day"><thead></thead><tbody></tbody></table></section>
+    <section id="sec-recent"><h2>Recent calls</h2><table id="t-recent"><thead></thead><tbody></tbody></table></section>
+    <footer>Fetched from <code>/api/usage</code>.</footer>
+  </main>
+  <script>
+    const fmt = (n) => {
+      if (n == null || n === "") return "—";
+      const a = Math.abs(n) >= 1e6 ? (n/1e6).toFixed(n%1e6?1:0)+"M"
+               : Math.abs(n) >= 1e3 ? (n/1e3).toFixed(n%1e3?1:0)+"k"
+               : String(n);
+      return a;
+    };
+    const esc = (s) => String(s ?? "—").replace(/[&<>"']/g, c =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    async function loadData() {
+      const res = await fetch("/api/usage", {cache: "no-store"});
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return await res.json();
+    }
+
+    function maxCol(rows, key) {
+      return Math.max(1, ...rows.map(r => Number(r[key] || 0)));
+    }
+
+    function render() {
+      const err = document.getElementById("err");
+      document.getElementById("cards").innerHTML = "";
+      err.textContent = "refreshing…";
+      Promise.resolve(loadData()).then(d => {
+        err.textContent = "";
+        const t = d.total || {prompt_tokens:0,completion_tokens:0,total_tokens:0,calls:0};
+        const m = d.by_model || [];
+        const p = d.by_provider || [];
+        const day = d.by_day || [];
+        const rec = d.recent || [];
+        const mxT = maxCol(m, "total_tokens");
+        const mxP = maxCol(p, "total_tokens");
+        const mxD = maxCol(day, "total_tokens");
+
+        const cards = [
+          ["Total tokens", fmt(t.total_tokens)],
+          ["Prompt", fmt(t.prompt_tokens)],
+          ["Completion", fmt(t.completion_tokens)],
+          ["LLM calls", (t.calls||0).toLocaleString()],
+        ];
+        document.getElementById("cards").innerHTML = cards.map(([l,v]) =>
+          `<div class="card"><div class="lbl">${esc(l)}</div><div class="val">${esc(v)}</div>`+
+          (d.first_seen ? `<div class="sub">since ${new Date(d.first_seen*1000).toISOString().slice(0,10)}</div>` : "") +
+          `</div>`).join("");
+
+        // By model
+        const tbM = document.querySelector("#t-model tbody");
+        tbM.innerHTML = m.length ? m.map(r => `
+          <tr><td>${esc(r.provider)} / ${esc(r.model)}</td>
+          <td class="num">${fmt(r.prompt_tokens)}</td><td class="num">${fmt(r.completion_tokens)}</td>
+          <td class="num"><b>${fmt(r.total_tokens)}</b></td>
+          <td class="num"><span class="pill">${r.calls}</span></td>
+          <td><div class="bar-wrap"><div class="bar" style="width:${(r.total_tokens/mxT*100).toFixed(1)}%"></div></div></td></tr>`).join("") :
+          `<tr><td colspan="6" class="empty">No model usage yet.</td></tr>`;
+        // By provider
+        const tbP = document.querySelector("#t-prov tbody");
+        tbP.innerHTML = p.length ? p.map(r => `
+          <tr><td>${esc(r.provider)}</td>
+          <td class="num">${fmt(r.prompt_tokens)}</td><td class="num">${fmt(r.completion_tokens)}</td>
+          <td class="num"><b>${fmt(r.total_tokens)}</b></td>
+          <td class="num"><span class="pill">${r.calls}</span></td>
+          <td><div class="bar-wrap"><div class="bar" style="width:${(r.total_tokens/mxP*100).toFixed(1)}%"></div></div></td></tr>`).join("") :
+          `<tr><td colspan="6" class="empty">No provider usage yet.</td></tr>`;
+        // By day
+        const tbD = document.querySelector("#t-day tbody");
+        tbD.innerHTML = day.length ? day.map(r => `
+          <tr><td>${esc(r.date)}</td>
+          <td class="num">${fmt(r.prompt_tokens)}</td><td class="num">${fmt(r.completion_tokens)}</td>
+          <td class="num"><b>${fmt(r.total_tokens)}</b></td>
+          <td class="num"><span class="pill">${r.calls}</span></td>
+          <td><div class="bar-wrap"><div class="bar" style="width:${(r.total_tokens/mxD*100).toFixed(1)}%"></div></div></td></tr>`).join("") :
+          `<tr><td colspan="6" class="empty">No daily usage yet.</td></tr>`;
+        // Recent
+        const tbR = document.querySelector("#t-recent tbody");
+        tbR.innerHTML = rec.length ? rec.map(r => `
+          <tr><td>${esc(r.provider)}</td><td>${esc(r.model)}</td><td><span class="pill">${esc(r.role)}</span></td>
+          <td class="num">${fmt(r.prompt_tokens)}</td><td class="num">${fmt(r.completion_tokens)}</td>
+          <td class="num">${r.reasoning_tokens ? esc(fmt(r.reasoning_tokens)) + " think" : ""}</td>
+          <td class="num"><small>${new Date(r.created_at*1000).toLocaleString()}</small></td></tr>`).join("") :
+          `<tr><td colspan="7" class="empty">No recent calls.</td></tr>`;
+      }).catch(e => { err.textContent = "Error: " + e.message; });
+    }
+    render();
+    setInterval(render, 30000);
+  </script>
+</body>
+</html>

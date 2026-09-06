@@ -8,6 +8,7 @@ import AgentTrace from './components/AgentTrace.jsx'
 import ReasoningBox from './components/ReasoningBox.jsx'
 import Analyzer from './components/Analyzer.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
+import { Sparkle, AttachmentPaperclip, Remove, SendSolid } from './components/Icons.jsx'
 
 // Malayalam mode: route chats through the Gemini provider (multilingual, strong
 // Malayalam) and prepend a system instruction so the model replies only in
@@ -34,6 +35,15 @@ const MALAYALAM_SYSTEM_PROMPT =
   '"omg super sugam" — speak like an uncle who\'s read too much and explains too ' +
   'little. Never answer in English prose. You run inside a local proof-of-concept ' +
   'chatbot on the user\'s lab machine.'
+
+// Suggested starter prompts shown in the empty state — pick up the input so the
+// user can review/tweak before sending (matches the "grumpy uncle" security persona).
+const QUICK_PROMPTS = [
+  'Analyze this log: what are the top attack indicators?',
+  'Write a Python script to detect brute-force login attempts',
+  'Explain CVE-2024-3400 in plain terms',
+  'Summarize these firewall rules for review',
+]
 
 export default function App() {
   const [tab, setTab] = useState('chat')
@@ -318,8 +328,10 @@ export default function App() {
             <button
               key={id}
               onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
-              className={`px-4 py-1.5 text-[13px] font-medium rounded-t-lg border-b-2 transition-colors
-                ${tab === id ? 'text-accent2 border-accent2' : 'text-muted border-transparent hover:text-text'}`}>
+              className={`px-4 py-2 text-[13px] font-medium rounded-t-lg border-b-2 transition-all
+                ${tab === id
+                  ? 'text-accent2 border-accent2 bg-panel2'
+                  : 'text-muted border-transparent hover:text-text hover:bg-panel2/60'}`}>
               {label}
             </button>
           ))}
@@ -341,18 +353,32 @@ export default function App() {
             <div ref={scrollRef} className="flex-1 overflow-y-auto py-5 space-y-3">
               {messages.length === 0 && (
                 <div className="h-full flex items-center justify-center text-center px-6">
-                  <div className="space-y-4 max-w-md">
-                    <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto">
-                      <span className="text-2xl">✨</span>
+                  <div className="space-y-6 max-w-md">
+                    <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto">
+                      <Sparkle className="w-7 h-7 text-accent" />
                     </div>
-                    <h2 className="text-lg font-medium text-text">Sallaapam</h2>
-                    <p className="text-sm text-muted">
+                    <h2 className="text-lg font-medium text-text2">Sallaapam</h2>
+                    <p className="text-sm text-muted max-w-xs mx-auto">
                       Ask me anything — analyze logs, write code, research threats, or just chat.
                     </p>
-                    <div className="flex flex-wrap gap-1.5 justify-center text-[11px] text-muted">
-                      <span className="px-2 py-1 bg-panel2 rounded-full">Agent mode</span>
-                      <span className="px-2 py-1 bg-panel2 rounded-full">{Object.keys(providers).length} providers</span>
-                      <span className="px-2 py-1 bg-panel2 rounded-full">History saved</span>
+
+                    {/* Suggested starter prompts */}
+                    <div className="flex flex-col gap-2 pt-2">
+                      {QUICK_PROMPTS.map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => setInput(p)}
+                          className="text-left text-[13px] px-3.5 py-2 rounded-xl bg-panel2 border border-border text-muted hover:text-text hover:border-accent2/40 hover:bg-panel transition-colors text-balance"
+                        >
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5 justify-center text-[11px] text-muted pt-1">
+                      <span className="px-2.5 py-1 bg-panel2 rounded-full">Agent mode</span>
+                      <span className="px-2.5 py-1 bg-panel2 rounded-full">{Object.keys(providers).length} providers</span>
+                      <span className="px-2.5 py-1 bg-panel2 rounded-full">History saved</span>
                     </div>
                   </div>
                 </div>
@@ -398,7 +424,7 @@ export default function App() {
                     className="absolute left-2 bottom-2.5 p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors z-10"
                     title="Attach image"
                   >
-                    📎
+                    <AttachmentPaperclip className="w-5 h-5" />
                   </button>
                   <textarea
                     value={input}
@@ -411,9 +437,22 @@ export default function App() {
                   <button
                     onClick={send}
                     disabled={busy || (!input.trim() && attachedImages.length === 0)}
-                    className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-accent text-black font-semibold text-[13px] disabled:opacity-40 hover:brightness-90 transition-all"
+                    className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-accent text-[#1a1000] font-semibold text-[13px] disabled:opacity-40 hover:brightness-90 transition-all flex items-center justify-center gap-1.5"
                   >
-                    {busy ? '…' : 'Send'}
+                    {busy ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+                          <path className="opacity-75" fill="currentColor" d="M2 12a10 10 0 0114.83-8.83A1 1 0 0118 4v10a1 1 0 01-1 1H5a1 1 0 01-.83-1.55A10 10 0 002 12z" />
+                        </svg>
+                        <span>…</span>
+                      </>
+                    ) : (
+                      <>
+                        <SendSolid className="w-4 h-4" />
+                        <span>Send</span>
+                      </>
+                    )}
                   </button>
                 </div>
                 {attachedImages.length > 0 && (
@@ -425,7 +464,7 @@ export default function App() {
                           onClick={() => removeImage(img.id)}
                           className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-err text-white flex items-center justify-center text-[10px]"
                           title="Remove"
-                        >✕</button>
+                        ><Remove className="w-2.5 h-2.5" /></button>
                       </div>
                     ))}
                   </div>

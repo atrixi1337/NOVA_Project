@@ -85,27 +85,46 @@ button, select, input, textarea {
 }
 .md pre code { background: transparent; border: none; padding: 0; }
 
+/* Code block copy button (injected into rendered <pre> blocks) */
 .copy-btn {
   position: absolute;
   top: 7px;
   right: 7px;
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: 6px;
   border: 1px solid #24221d;
   background: #12100e;
   color: #6f6a5d;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   font-family: 'IBM Plex Mono', monospace;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
+.copy-btn svg { width: 13px; height: 13px; }
+.copy-btn .copy-icon,
+.copy-btn .check-icon { transition: opacity 0.2s ease; }
+.copy-btn .check-icon { opacity: 0; }
+.copy-btn.copied .copy-icon { opacity: 0; }
+.copy-btn.copied .check-icon { opacity: 1; }
 .md pre:hover .copy-btn { opacity: 1; }
 .copy-btn:hover { color: #d6d0c2; border-color: #c9a227; }
 
 /* collapsible elements */
 .collapsible > summary { cursor: pointer; list-style: none; user-select: none; }
 .collapsible > summary::-webkit-details-marker { display: none; }
+/* rotate only the chevron inside an open <details> summary */
+details[open] > summary .summary-chevron { transform: rotate(180deg); }
+.summary-chevron { transition: transform 0.2s ease; }
+/* fade in collapsible body for a softer reveal */
+.collapsible > div,
+.collapsible > .details-body {
+  animation: fade-in 0.18s ease-out;
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* thinking dots */
 @keyframes pulse {

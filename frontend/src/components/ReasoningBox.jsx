@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import hljs from 'highlight.js/lib/common'
+import { Brain, ChevronDown } from './Icons.jsx'
 
 // Reasoning collapsible box (e.g. gpt-5 / qwen reasoning payloads).
 export default function ReasoningBox({ reasoning }) {
@@ -16,8 +17,9 @@ export default function ReasoningBox({ reasoning }) {
   return (
     <details className="collapsible mt-3 rounded-xl border border-border bg-panel2/30">
       <summary className="px-3 py-2 text-sm font-medium text-accent2 cursor-pointer flex items-center gap-2">
-        <span>🧠</span>
+        <Brain className="w-4 h-4" />
         <span>Model reasoning</span>
+        <ChevronDown className="w-4 h-4 ml-auto summary-chevron" />
       </summary>
       <div
         className="px-3 pb-3 text-[13px] text-muted"
