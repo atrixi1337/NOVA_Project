@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { ChevronLeft, ChevronRight } from './Icons.jsx'
 
 function formatTime(ts) {
   if (!ts) return ''
@@ -20,7 +21,8 @@ function truncate(text, n) {
   return t.length > n ? t.slice(0, n) + '…' : t
 }
 
-// Conversation list sidebar with new-chat, rename, delete, and settings.
+// Conversation list sidebar with new-chat, rename, delete, settings, and a
+// collapse-to-icon-rail toggle (desktop). On mobile it remains a full drawer.
 export default function Sidebar({
   conversations,
   currentId,
@@ -32,6 +34,8 @@ export default function Sidebar({
   loading,
   open = false,
   onClose,
+  collapsed = false,
+  onToggleCollapse,
 }) {
   const [hovered, setHovered] = useState(null)
   const [renaming, setRenaming] = useState(null)
@@ -60,52 +64,110 @@ export default function Sidebar({
 
   const sorted = [...conversations].sort((a, b) => b.updated_at - a.updated_at)
 
+  // Collapsed = desktop icon rail: no text labels, compact dot list.
+  const isRail = !!collapsed
+
   return (
-    <aside className={`fixed inset-y-0 left-0 z-40 flex flex-col w-64 min-w-[240px] max-w-80 border-r border-border bg-sidebar overflow-hidden -translate-x-full md:static md:translate-x-0 transition-transform duration-200 ease-in-out ${open ? 'translate-x-0' : '-translate-x-full'}`}>
-      {/* top: brand + new chat */}
+    <aside
+      className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-sidebar overflow-hidden
+        -translate-x-full md:translate-x-0 transition-[transform, width] duration-200 ease-in-out
+        ${open ? 'translate-x-0' : '-translate-x-full'}
+        ${isRail ? 'w-64 min-w-[240px] max-w-80 md:w-16 md:min-w-[64px] md:max-w-[64px]' : 'w-64 min-w-[240px] max-w-80'}`}
+    >
+      {/* top: brand + collapse chevron + settings */}
       <div className="p-3 border-b border-border">
         <div className="flex items-center justify-between px-1 py-1">
           <div className="flex items-center gap-2.5">
             <img src="/logo.png" alt="Sallaapam" className="w-7 h-7 object-contain" />
-            <span className="font-semibold text-[16px] text-text">Sallaapam</span>
+            <span className={`font-semibold text-[16px] text-text whitespace-nowrap ${isRail ? 'md:hidden' : ''}`}>
+              Sallaapam
+            </span>
           </div>
-          <button
-            onClick={() => { onSettings(); onClose?.() }}
-            className="p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors"
-            title="Settings"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                d="M11.983  .063a1 1 0 01.033 1.987L11 3v1l.016 1.02a6.009 6.009 0 01.968 2.796l.016.104v1.877a.75.75 0 00.75.75h1a.75.75 0 010 1.5h-1a2.25 2.25 0 01-.456-.083 1 1 0 01-.544-.544 1 1 0 01.083-.456V7.81a4.014 4.014 0 00-.63-3.756A4.004 4.004 0 0012 1.944V3a1 1 0 011.987-.033 1 1 0 01-.033 1.987L13 5v1a4.014 4.014 0 01-3.756.63 1 1 0 01-.544.544v.007a1 1 0 01-.083-.456 1 1 0 01.544-.544 1 1 0 01.456.083 2.001 2.001 0 001.5-.517V5a1 1 0 011.987-.033l.016-1.04A1 1 0 0112 2v1zm4.95 10.05a5 5 0 00-7 0L4.5 13.1V15a1 1 0 001 1h2.59l1-1h1.83l1 1H17.5a1 1 0 001-1v-1.9l-1.45-1.45zM12 12a4.5 4.5 0 110 9 4.5 4.5 0 010-9z" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-0.5">
+            {!isRail && (
+              <button
+                onClick={onToggleCollapse}
+                className="md:inline-flex hidden p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors"
+                title="Collapse sidebar"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={() => { onSettings(); onClose?.() }}
+              className="p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors"
+              title="Settings"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                  d="M11.983 2.017a1 1 0 011.414 0l.03.031L19 8.05l4 4-6 6-4-4-4-4 6-6a1 1 0 011-1l.032.003.082.003 3.918-.933zM4 20h16a2 2 0 012 2H2a2 2 0 012-2z" />
+              </svg>
+            </button>
+            {isRail && (
+              <button
+                onClick={onToggleCollapse}
+                className="md:inline-flex hidden p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors"
+                title="Expand sidebar"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
+
         <button
           onClick={() => { onNew(); onClose?.() }}
-          disabled={loading.new}
-          className="mt-1 w-full flex items-center justify-center gap-2 px-3 py-2 text-[13px] font-medium text-[#1a1000] bg-accent rounded-xl hover:brightness-105 disabled:opacity-50 transition-all"
+          disabled={loading?.new}
+          className={`mt-1 w-full flex items-center gap-2 px-3 py-2 text-[13px] font-medium text-[#1a1000] bg-accent rounded-xl hover:brightness-105 disabled:opacity-50 transition-all
+            ${isRail ? 'justify-center px-2' : 'justify-start'}`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M12 4.5v15m7.5-7.5H4.5" />
           </svg>
-          New chat
+          <span className={isRail ? 'md:hidden' : ''}>New chat</span>
         </button>
       </div>
 
       {/* conversation list */}
-      <nav className="flex-1 overflow-y-auto py-2">
+      <nav className={`flex-1 overflow-y-auto ${isRail ? 'py-1' : 'py-2'}`}>
         {sorted.length === 0 ? (
-          <div className="px-4 py-6 text-center text-[13px] text-muted">
-            <div className="w-12 h-12 rounded-full bg-panel2 flex items-center justify-center mx-auto mb-2">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                  d="M8 10h.01M12 10h.01M16 10h.01M9 14h.01M13 14h.01M17 14h.01M21 8a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h14a2 2 0 002-2V8z" />
-              </svg>
-            </div>
-            <p className="text-sm text-muted">No conversations yet.</p>
-            <p className="text-[12px] text-muted/60 mt-1">Start a new chat to begin.</p>
+          <div className={`text-center ${isRail ? 'py-2' : 'px-4 py-6'}`}>
+            {!isRail && (
+              <>
+                <div className="w-12 h-12 rounded-full bg-panel2 flex items-center justify-center mx-auto mb-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                      d="M8 10h.01M12 10h.01M16 10h.01M9 14h.01M13 14h.01M17 14h.01M21 8a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h14a2 2 0 002-2V8z" />
+                    </svg>
+                </div>
+                <p className="text-sm text-muted">No conversations yet.</p>
+                <p className="text-[12px] text-muted/60 mt-1">Start a new chat to begin.</p>
+              </>
+            )}
+            {isRail && <span className="text-[10px] text-muted">—</span>}
           </div>
+        ) : isRail ? (
+          <ul className="space-y-1.5 px-2">
+            {sorted.map((c) => {
+              const active = c.id === currentId
+              return (
+                <li key={c.id}>
+                  <button
+                    onClick={() => { onSelect(c.id); onClose?.() }}
+                    title={c.title}
+                    className={`w-full h-9 flex items-center justify-center rounded-xl transition-colors
+                      ${active ? 'bg-panel2' : 'hover:bg-panel2/50'}`}
+                  >
+                    <span
+                      className={`w-2.5 h-2.5 rounded-full ${active ? 'bg-accent2' : 'bg-muted'}`}
+                      title={c.title}
+                    />
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
         ) : (
           <ul className="space-y-1 px-2">
             {sorted.map((c) => {
@@ -190,13 +252,14 @@ export default function Sidebar({
       <div className="p-2 border-t border-border">
         <button
           onClick={() => { onSettings(); onClose?.() }}
-          className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-muted hover:text-text hover:bg-panel2 rounded-xl transition-colors"
+          className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] text-muted hover:text-text hover:bg-panel2 rounded-xl transition-colors
+            ${isRail ? 'justify-center' : 'justify-start'}`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
               d="M11.983 2.017a1 1 0 011.414 0l.03.031L19 8.05l4 4-6 6-4-4-4-4 6-6a1 1 0 011-1l.032.003.082.003 3.918-.933zM4 20h16a2 2 0 012 2H2a2 2 0 012-2z" />
           </svg>
-          Settings
+          <span className={isRail ? 'md:hidden' : ''}>Settings</span>
         </button>
       </div>
     </aside>
