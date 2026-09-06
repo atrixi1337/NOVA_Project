@@ -42,12 +42,15 @@ function CopyBtn({ text, label = 'copy' }) {
 export default function GatewayTab({ health }) {
   const [keys, setKeys] = useState([])
   const [providers, setProviders] = useState({})
+  const [publicBase, setPublicBase] = useState('')
   const [busy, setBusy] = useState(false)
   const [name, setName] = useState('')
   const [newKey, setNewKey] = useState(null)
   const [err, setErr] = useState('')
   const [confirmRevoke, setConfirmRevoke] = useState(null)
-  const origin = window.location.origin
+  // Advertised base URL: the configured NOVA_PUBLIC_URL when set (so snippets
+  // always carry the public domain), otherwise the address you're browsing from.
+  const origin = publicBase || window.location.origin
 
   const load = async () => {
     setBusy(true)
@@ -55,6 +58,7 @@ export default function GatewayTab({ health }) {
       const [keyRes, modelRes] = await Promise.all([api.gatewayKeys(), api.models().catch(() => ({}))])
       setKeys(keyRes.keys || [])
       setProviders(modelRes.providers || {})
+      setPublicBase(modelRes.public_base_url || '')
     } catch (e) { setErr(e.message) } finally { setBusy(false) }
   }
   useEffect(() => { load() }, [])

@@ -378,6 +378,11 @@ NOVA_MAX_UPLOAD_MB = int(os.getenv("NOVA_MAX_UPLOAD_MB", "10"))
 # scraping to the cleaner you.com results API. Get one at you.com/home/api-key.
 YOU_API_KEY = os.getenv("YOU_API_KEY", "").strip()
 
+# Public base URL of this deployment (e.g. https://nova.terminalflaw.xyz).
+# When set, the Gateway tab's snippets always advertise this URL — so agents on
+# other machines get the public domain even if you're browsing via localhost/LAN.
+PUBLIC_BASE_URL = os.getenv("NOVA_PUBLIC_URL", "").strip().rstrip("/")
+
 # SQLite database for chat history (file-based, zero-dependency persistence).
 # A persistent volume or bind-mount can hold this file across container restarts.
 HISTORY_DB = os.getenv("NOVA_HISTORY_DB", str(Path(__file__).parent / "nova_history.db"))
@@ -1543,6 +1548,7 @@ async def get_models():
             for pid, p in PROVIDERS.items()
         },
         "default_provider": DEFAULT_PROVIDER,
+        "public_base_url": PUBLIC_BASE_URL,
     }
 
 
