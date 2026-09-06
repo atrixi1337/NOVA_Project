@@ -1,302 +1,193 @@
-# AI POC — multi-provider AI chat & log analyzer (proof of concept)
+# Sallaapam / NOVA — multi-provider AI chat, arena & security lab (proof of concept)
 
-A small local web app that proxies chat and log-analysis requests to **several
-OpenAI-compatible providers** through one local FastAPI backend:
+A single-file FastAPI backend that normalizes **17 AI providers** into one
+OpenAI-style interface, plus a polished Vite+React SPA — with streaming replies,
+a provider **Arena**, a sandboxed **agent** with web-research tools, image
+generation, a log/EVTX analyzer, lifetime token accounting, and shared-passphrase
+auth. Built to run on an Android phone in Termux and exposed through a Cloudflare
+tunnel; also happy on any Linux box or behind systemd.
 
-* **Local Ollama** *(default)* — uncensored local models, no API key. Ships with
-  `dolphin3.0:8b` (Dolphin 3.0 Llama 3.1 8B, Q4). Runs fully offline on your GPU;
-  auto-evicted from VRAM after idle. **This is the only truly uncensored provider.**
-* **Azure AI Foundry** — `gpt-5-mini` (and `gpt-4o`, `gpt-4o-mini`). *(cloud, censored)*
-* **Google Gemini** — `gemini-3.6-flash`, `gemini-3.5-flash` (via Gemini's OpenAI-compatible endpoint). *(cloud, censored)*
-* **Amazon Nova** — `nova-lite-v1`, `nova-pro-v1`, `nova-premier-v1`, `nova-micro-v1`, `nova-2-lite-v1`. *(cloud, censored)*
-* **Cohere** — `command-a-plus-05-2026`, `command-r7b-12-2024`, `command-r-plus` (native v2 chat API). *(cloud, censored)*
-* **OpenRouter** — `openrouter/free` auto-router (routes to any available free model, e.g. `nvidia/nemotron-nano-9b-v2:free`). *(cloud, censored)*
-* **HuggingFace Inference Providers router** — free models: `openai/gpt-oss-20b`,
-  `zai-org/GLM-5.2`, `meta-models/Muse-Glimmer-30B`, `inclusionAI/Ling-3.0-flash`,
-  `meta-llama/Llama-3.1-8B-Instruct`. *(cloud, censored)*
-* **Requesty** — free models: `nvidia/nemotron-3.5-lightning-30b-a3b`,
-  `nvidia/muse-glimmer-30b`, `novita/inclusionai/ling-3.0-tiny`. *(cloud, censored)*
-* **Cloudflare Workers AI** — free 10,000 Neurons/day tier. Models:
-  `@cf/qwen/qwen3.8-27b` (27B, vision+reasoning), `@cf/meta/llama-3.1-8b-instruct`,
-  `@cf/meta/llama-3.2-3b-instruct`. *(cloud, censored)*
-* **Mistral AI** — genuine free tier on `mistral-small-latest` (rate-limited);
-  also `mistral-large-latest`, `open-mistral-7b`, `ministral-8b-latest`. *(cloud, censored)*
+```
+Termux phone ── uvicorn :8000 ── Cloudflare named tunnel ── https://you.example.com
+                                   (or any Linux host / systemd / venv)
+```
 
-> **Censored vs uncensored:** every provider marked *(cloud, censored)* runs on a
-> hosted service with its own safety filtering and will refuse some requests. The
-> local Ollama provider is the only one with no external filter — use it for the
-> authorised security-research workloads. The cloud routers are useful as a
-> capability fallback when the local 8B is too weak for a task.
+## Feature tour
 
-It now includes:
+**Chat**
+- **Token streaming** via SSE (`/api/chat/stream`) with a blinking caret, a
+  **Stop** button (aborts provider-side too), and an **80 ms throttled renderer**
+  so long replies stay smooth on phones.
+- **Regenerate (↺)** any reply and **edit-and-resend (✎)** your last message —
+  both *replace* the old turn in history instead of duplicating it.
+- **Live reasoning view** — reasoning models (IFM K2, gpt-5, Upstage…) stream
+  their thinking into an auto-opened "Thinking…" panel while they deliberate.
+- Markdown + GFM tables, syntax-highlighted code blocks with language header and
+  copy button (warm custom highlight.js theme), per-message copy, image
+  attachments (paste / drag-drop / picker), per-conversation input drafts,
+  smart auto-scroll with jump-to-latest, IME-safe Enter handling.
+- Conversation sidebar with **search filter**, date grouping
+  (Today/Yesterday/This week/Earlier), per-provider color dots, inline rename,
+  two-tap delete confirm.
 
-* A polished React chat UI (dark theme, mobile-friendly) with a **conversation sidebar**
-  — full chat history persisted in SQLite, with rename, delete, and new-chat flows.
-* A **Provider + Model** picker so you can switch backends live, markdown + code
-  highlighting with copy buttons, a collapsible reasoning box, and an agent tool-trace panel.
-* **Agent mode**: the model can call *safe local tools* — `get_time`, `calculate`,
-  and a sandboxed `read_file` — then summarise the results.
-* **Reasoning effort** control (low/medium/high) for reasoning models, with a
-  collapsible "Model reasoning" box so the chain-of-thought never floods the screen.
-* **File / log analyzer** tab: upload a `.log`/`.txt`/`.csv`/`.json`/`.evtx`, pick
-  **Security** or **General** mode, and get a structured report. Windows Event
-  Logs (`.evtx`, binary) are auto-converted to text on the server.
-* **Settings modal**: store API keys in your browser's localStorage; they override
-  server-side keys per-request (keys never leave your browser).
-* All API keys stay **server-side only** (never shipped to the browser).
+**Arena** — pick up to 4 providers, ask once, answers stream in side-by-side
+columns with latency, token counts and a "⚡ first" badge. Ephemeral by design
+(nothing saved to history). Runs through the same streaming endpoint.
 
-## Deploy with one command (public Cloudflare link)
+**Personas** (applied in chat *and* Arena)
+- **Malayalam mode** — routes via Gemini and replies only in Malayalam/Manglish,
+  as a grumpy old Malayali uncle.
+- **NovaSec** — cybersecurity-expert persona (bounded to authorized security
+  work) that also auto-selects the **Recon** agent-tool preset.
 
-Anyone can deploy this on a fresh Linux box and get a public, HTTPS-accessible
-URL via a Cloudflare quick tunnel — **the only input is your provider API key(s)**.
-Everything else (clone, venv, deps, systemd services, tunnel) is automated and
-reboot-persistent:
+**Agent mode** — safe local + web tools with named presets
+(`NOVA_… ChatRequest.tools_preset`):
+| Preset | Tools |
+|---|---|
+| Core | `get_time`, `calculate` (AST allow-list), `read_file` (sandboxed to `NOVA_SANDBOX`) |
+| Research | Core + `web_search` (DuckDuckGo, no key), `web_fetch` |
+| Recon / NovaSec | Research + `http_headers` (passive security-header probe) |
+
+**Image generation** — `/api/images` auto-routes through the first configured
+provider: **Gemini** (`gemini-2.5-flash-image`, key failover) → **Cloudflare
+Workers AI** (`flux-1-schnell`) → legacy Azure Foundry DALL·E. Placeholder
+credentials are detected and skipped honestly.
+
+**Log analyzer** — upload `.log/.txt/.csv/.json/.evtx` (Windows Event Logs are
+converted server-side), Security or General mode, objective pre-stats computed
+before the LLM call.
+
+**Usage accounting** — every assistant turn lands in a `usage_ledger` that
+survives chat deletion: totals, by-model, by-provider, **by-person** (see auth),
+by-day sparkline, recent activity. Rendered in the app's **Usage** tab and on a
+standalone `/usage` page. Latency-friendly: `/api/usage` accepts
+`?provider=&model=&days=&recent=1`.
+
+**Auth (shared passphrase)** — when `NOVA_AUTH_PASSPHRASE` is set, all of
+`/api/*` locks:
+- Browser: one passphrase at the lock screen → **signed 30-day HttpOnly cookie**
+  (stateless HMAC — no session store). Each device unlocks once.
+- Scripts/bots: send the secret as `X-Nova-Token: <secret>`.
+- **Named tokens** (`owner:pass1,alex:pass2`) stamp every usage-ledger row with
+  the actor → the Usage tab shows *who* burned what. Rotate the passphrase to
+  revoke every device.
+- `/api/health` and `/api/auth/login` stay public; logins rate-limited
+  (5/min/IP); wildcard CORS removed (the SPA is same-origin).
+
+## Providers (17)
+
+| id | label | notes |
+|---|---|---|
+| `foundry` | Azure AI Foundry | gpt-5-mini / gpt-4o family, `api-key` header |
+| `gemini` | Google Gemini | OpenAI-compat route, **backup-key failover**, image gen |
+| `nova` | Amazon Nova | nova-2/lite/pro/micro |
+| `cohere` | Cohere | native v2 API, normalized to OpenAI shape |
+| `ollama` | Local Ollama | uncensored, VRAM idle-unload watchdog (not viable on the phone) |
+| `openrouter` / `hfrouter` / `requesty` / `cloudflare` / `mistral` | free cloud tiers | censored |
+| `gmi` / `inception` / `upstage` / `reka` / `nvidia` / `agnes` / `ifm` | GPU-cloud & specialty | IFM K2 gets 180 s reasoning timeouts + thinking-trace replay |
+
+Every provider is OpenAI-compatible except Cohere (special-cased). Add one by
+appending to `PROVIDERS` in `backend.py` — defaults are overridable via
+`<PROVIDER>_API_KEY/_BASE_URL/_MODEL/_MODELS` in `.env` (see `.env.example`).
+
+## Run it
+
+### Python venv (any Linux/macOS)
+
+```bash
+pip install -r requirements.txt        # phone: see requirements.phone.txt note below
+cp .env.example .env                   # fill in the keys you have
+uvicorn backend:app --host 0.0.0.0 --port 8000
+```
+
+Open http://localhost:8000. To rebuild the UI after changing `frontend/src`:
+
+```bash
+cd frontend && npm install && npx vite build   # outputs to ../static
+```
+
+FastAPI serves `static/` from disk per request — **frontend-only changes need no
+server restart; `backend.py` changes do.**
+
+### Android phone (Termux) — the primary deployment
+
+```bash
+bash deploy/termux-deploy.sh     # deps, venv, .env check, uvicorn, tunnel, wake-lock
+```
+
+Resilience (already wired in the live deployment):
+
+```bash
+nohup bash ~/NOVA_Project/deploy/phone-watchdog.sh >/dev/null 2>&1 &   # auto-restart
+```
+
+The watchdog checks `/api/health` every 30 s and restarts uvicorn after 2
+consecutive failures (pid-locked, safe in `~/.termux/boot/start-nova.sh`).
+
+### Nightly backups (from a machine with SSH access to the phone)
+
+```bash
+deploy/devbox-backup.sh              # one run now
+# cron: 15 4 * * * ~/PROJECT/NOVA_Project/deploy/devbox-backup.sh >> ~/NOVA_Project_backups/backup.log 2>&1
+```
+
+Pulls a consistent SQLite snapshot (`deploy/phone-snapshot-db.py`) + the phone's
+`.env` into `~/NOVA_Project_backups/<date>/`, pruned to 14 days.
+
+### Linux one-liner (systemd + Cloudflare quick tunnel)
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/atrixi1337/NOVA_Project/master/install.sh)"
 ```
 
-What it does:
-
-1. Clones this repo into `~/NOVA_Project`.
-2. Builds a Python venv and installs deps (including `python-evtx` for `.evtx` support).
-3. Prompts for the API keys you have and writes them to `~/NOVA_Project/.env`
-   (the only secrets, never committed).
-4. Installs `cloudflared` and launches the systemd service that runs the app on `:8000`
-   plus a Cloudflare quick tunnel exposing it.
-5. Prints your public URL (also saved to `~/NOVA_Project/tunnel_url.txt`).
-
-After install the app is reachable from your phone/anywhere at that URL, and it
-survives reboots. Run `sudo systemctl status nova-poc nova-tunnel` to check.
-
-> **Note on the public link:** a quick tunnel gives a *random* `*.trycloudflare.com`
-> URL that changes if the tunnel restarts. Anyone with the link can use your keys
-> (it's a PoC — fine for personal/mobile use, not for sharing publicly). The
-> current URL is always in `~/NOVA_Project/tunnel_url.txt`. For a **fixed** URL,
-> use a named Cloudflare tunnel (needs a free Cloudflare account + API token).
-
-Optional env vars before the command: `NOVA_INSTALL_DIR` (install path,
-default `~/NOVA_Project`), `NOVA_PORT` (app port, default `8000`).
-Add `--no-service` to skip systemd (e.g. for containers/tests) and run the app
-in the foreground instead.
-
-## Deploy to Fly.io (cloud — free, always-on)
-
-Get a public HTTPS URL with zero server management. Fly.io's free tier includes
-1 shared CPU, 256 MB RAM, and a 1 GB persistent volume (perfect for SQLite chat history).
-
-**One-time setup:**
-
-1. Install `flyctl`:
-   ```bash
-   curl -L https://fly.io/install.sh | sh
-   export PATH="$HOME/.fly/bin:$PATH"
-   ```
-
-2. Sign up at [fly.io](https://fly.io), then create a personal access token at
-   [fly.io/user/personal_access_tokens](https://fly.io/user/personal_access_tokens)
-   (scope: Read/Write). Export it:
-   ```bash
-   export FLY_API_TOKEN="<your-token>"
-   ```
-
-3. Create the app + volume (only needed once):
-   ```bash
-   flyctl apps create nova-poc-app --region sin    # or your nearest region
-   flyctl volumes create nova_data --size 1 --region sin -y
-   ```
-
-4. Deploy (the `deploy.sh` helper does everything: build frontend, set secrets, deploy):
-   ```bash
-   cd NOVA_Project
-   bash deploy.sh
-   ```
-
-   Or manually:
-   ```bash
-   cd frontend && npm run build && cd ..
-   flyctl secrets set NOVA_API_KEY="..." FOUNDRIES_API_KEY="..." ...  # from your .env
-   flyctl deploy
-   ```
-
-The app will be live at `https://nova-poc-app.fly.dev/`. The SQLite database
-(`nova_history.db`) lives on the persistent `/data` volume, so chat history
-survives restarts and redeployments.
-
-### Updating an existing deployment
-
-Just re-run `bash deploy.sh`. It rebuilds the frontend, pushes the new image,
-and performs a rolling restart — chat history is preserved.
-
-### Local development (Docker)
-
-```bash
-cd NOVA_Project
-cp .env.example .env     # fill in your keys
-docker compose up -d --build
-```
-
-## Quick start (Python venv)
-
-```bash
-cd ~/NOVA_Project
-python3 -m venv nova_env          # or reuse the existing one
-source nova_env/bin/activate
-pip install -r requirements.txt
-
-cp .env.example .env              # then EDIT .env and paste your provider keys
-nano .env
-
-uvicorn backend:app --host 0.0.0.0 --port 8000
-```
-
-Open http://localhost:8000 (from another machine on the LAN use the box's IP).
-
-## Quick start (Docker)
-
-```bash
-cd ~/NOVA_Project
-cp .env.example .env              # fill in the provider keys you have
-docker compose up -d --build
-```
-
-App is on http://localhost:8000.
-
-## Frontend (React + Vite + Tailwind)
-
-The UI is a single-page React app (in `frontend/`) that talks to the FastAPI
-backend. `npm run build` compiles it into `static/` (which FastAPI serves), so a
-normal `systemctl restart nova-poc` picks up UI changes after a build.
-
-```bash
-cd ~/NOVA_Project/frontend
-npm install
-npm run dev        # live dev server on :5173 (proxies API same-origin)
-npm run build      # -> outputs to ../static (served by the backend on :8000)
-```
-
-Features of the UI:
-* Markdown rendering with syntax-highlighted code blocks + copy buttons.
-* Collapsible **🧠 Model reasoning** box (when a provider returns reasoning).
-* **🛠 Tool trace** panel in Agent mode (shows each tool call + result + token usage).
-* Provider + Model picker (all 10 providers, including the uncensored local Ollama default).
-* Ollama **Load/Unload** controls in the header (warm/cold VRAM).
-* **Log Analyzer** tab: upload `.log/.txt/.csv/.json/.evtx`, pick Security/General.
-
-## Configuration (`.env`)
-
-All keys are optional — only configure the providers you use. The UI defaults to
-`DEFAULT_PROVIDER` (set to `ollama`).
+## Configuration essentials (`.env`)
 
 ```ini
-# Which provider the UI loads by default:
-#   ollama | foundry | gemini | nova | cohere | openrouter | hfrouter | requesty
-DEFAULT_PROVIDER=ollama
+DEFAULT_PROVIDER=inception            # UI default (any provider id above)
+NOVA_SANDBOX=/path/allowed/for/read_file
 
-# Local Ollama (uncensored local models, no API key) — default provider
-OLLAMA_API_KEY=ollama          # ignored by Ollama, shown for parity only
-OLLAMA_BASE_URL=http://localhost:11434/v1
-OLLAMA_MODEL=dolphin3.0:8b
-OLLAMA_MODELS=dolphin3.0:8b
-OLLAMA_IDLE_UNLOAD=300          # seconds of inactivity before VRAM eviction (0 = never)
+# auth (leave NOVA_AUTH_PASSPHRASE unset to disable auth entirely)
+NOVA_AUTH_PASSPHRASE=owner:pass1,alex:pass2     # or one bare passphrase
+NOVA_AUTH_SECRET=<random string>                # signs the session cookie
 
-# Amazon Nova (optional)
-NOVA_API_KEY=your-nova-key-here
-NOVA_BASE_URL=https://api.nova.amazon.com/v1
-NOVA_MODEL=nova-2-lite-v1
-
-# Azure AI Foundry (optional) — default provider
-FOUNDRY_API_KEY=your-foundry-key-here
-FOUNDRY_BASE_URL=https://your-resource.services.ai.azure.com/openai/v1
-FOUNDRY_MODEL=gpt-5-mini
-FOUNDRY_MODELS=gpt-5-mini,gpt-4o,gpt-4o-mini
-
-# Google Gemini via OpenAI-compatible endpoint (optional)
-GEMINI_API_KEY=your-gemini-key-here
-GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-GEMINI_MODEL=gemini-3.6-flash
-GEMINI_MODELS=gemini-3.6-flash,gemini-3.5-flash
-
-# Cohere (optional) — native v2 chat API
-COHERE_API_KEY=your-cohere-key-here
-COHERE_BASE_URL=https://api.cohere.ai/v2
-COHERE_MODEL=command-a-plus-05-2026
-COHERE_MODELS=command-a-plus-05-2026,command-r7b-12-2024,command-r-plus
-
-# OpenRouter (optional) — free auto-router; openrouter/free routes to any free model
-OPENROUTER_API_KEY=your-openrouter-key-here
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=openrouter/free
-OPENROUTER_MODELS=openrouter/free
-
-# HuggingFace Inference Providers router (optional) — uses your HF token
-HF_TOKEN=your-huggingface-token-here
-HFROUTER_BASE_URL=https://router.huggingface.co/v1
-HFROUTER_MODEL=openai/gpt-oss-20b
-HFROUTER_MODELS=openai/gpt-oss-20b,zai-org/GLM-5.2,meta-models/Muse-Glimmer-30B,inclusionAI/Ling-3.0-flash,meta-llama/Llama-3.1-8B-Instruct
-
-# Requesty (optional) — free models, 200 req/day, no card
-REQUESTY_API_KEY=your-requesty-key-here
-REQUESTY_BASE_URL=https://router.requesty.ai/v1
-REQUESTY_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
-REQUESTY_MODELS=nvidia/nemotron-3.5-lightning-30b-a3b,nvidia/muse-glimmer-30b,novita/inclusionai/ling-3.0-tiny
-
-# Cloudflare Workers AI (optional) — free 10k Neurons/day; needs account ID + token
-CLOUDFLARE_ACCOUNT_ID=your-cloudflare-account-id
-CLOUDFLARE_API_TOKEN=your-cloudflare-api-token
-CLOUDFLARE_BASE_URL=https://api.cloudflare.com/client/v4/accounts/your-cloudflare-account-id/ai/v1
-CLOUDFLARE_MODEL=@cf/qwen/qwen3.8-27b
-CLOUDFLARE_MODELS=@cf/qwen/qwen3.8-27b,@cf/meta/llama-3.1-8b-instruct,@cf/meta/llama-3.2-3b-instruct
-
-# Mistral AI (optional) — genuine free tier on mistral-small-latest (rate-limited)
-MISTRAL_API_KEY=your-mistral-key-here
-MISTRAL_BASE_URL=https://api.mistral.ai/v1
-MISTRAL_MODEL=mistral-small-latest
-MISTRAL_MODELS=mistral-small-latest,mistral-large-latest,open-mistral-7b,ministral-8b-latest
-
-# server / sandbox
-APP_HOST=0.0.0.0
-APP_PORT=8000
-NOVA_SANDBOX=/home/dev/PROJECT/NOVA_Project   # read_file tool is confined here
+# providers: <ID>_API_KEY / _BASE_URL / _MODEL / _MODELS  (see .env.example)
+GEMINI_API_KEY=...                    # + GEMINI_API_KEY_BACKUP for failover
+CLOUDFLARE_ACCOUNT_ID=...             # real values unlock flux image gen
+NOVA_IMAGE_MODEL=gemini-2.5-flash-image
 ```
 
-## Using it
+`requirements.txt` pins `uvicorn[standard]`, which fails to build on Termux
+(aarch64, no `watchfiles` wheel) — `deploy/termux-deploy.sh` rewrites it to
+plain `uvicorn` (see `requirements.phone.txt`).
 
-* Pick a **Provider** from the top dropdown (Local Ollama / Azure Foundry / Google
-  Gemini / Amazon Nova / Cohere / OpenRouter / HuggingFace Router / Requesty /
-  Cloudflare Workers AI / Mistral AI). The **Model** list repopulates for that
-  provider automatically. Cloud providers are tagged so you know they're censored;
-  Ollama is the uncensored local default.
-* Pick a **Reasoning** level (low/medium/high) when using a reasoning model — the
-  model's thinking is shown in a collapsed "🧠 Model reasoning" box.
-* Type a message and hit Enter. Flip **Agent mode** to let the model use tools:
-  * "What time is it?"
-  * "Calculate (42 * 17) / 3"
-  * "Read the file env.example"
-* The agent shows a tool-trace panel (what it called, with what args, and the
-  result) so the tool access is visible — useful for a PoC/demo.
+## HTTP surface
 
-### Analyzer tab
+| Route | What |
+|---|---|
+| `POST /api/chat` | non-streaming chat + agent tool loop |
+| `POST /api/chat/stream` | SSE streaming chat (agent mode stays on `/api/chat`) |
+| `POST /api/auth/login` | passphrase → 30-day cookie (public) |
+| `GET /api/health` | liveness + provider config (public) |
+| `GET /api/models` | provider registry + model lists |
+| `GET /api/usage` | lifetime ledger aggregates (`?provider=&days=&recent=1`) |
+| `POST /api/images` | text→image (gemini → cloudflare → foundry) |
+| `POST /api/analyze` | log/EVTX analysis (multipart) |
+| `GET/POST/PUT/DELETE /api/conversations…` | history CRUD + clear |
+| `GET/POST /api/ollama/*` | local Ollama status/load/unload |
+| `/`, `/usage`, `/mobile` | SPA, standalone dashboard, phone status page |
 
-* Upload a log file (`.log`, `.txt`, `.csv`, `.json`, or `.evtx`).
-* Choose **Security** (threat-focused) or **General** (triage/summary) mode.
-* Server-side pre-stats (line count, error/warn counts, top source IPs, EVTX
-  record count) are computed before the LLM so the UI has hard numbers even if
-  the model call fails.
-* For `.evtx` (binary Windows Event Logs), the file is converted to compact text
-  on the server (no EVTX left on disk) — up to ~60k chars are sent to the model.
-* You can paste a key directly in the UI's "Key (optional)" box instead of putting
-  it in `.env` (it still never leaves the server).
+## Notes & scope
 
-## Notes / scope
-
-* This is a **PoC for a local lab**. No auth, no rate limiting, no production
-  hardening. Don't expose it to the public internet as-is.
-* `read_file` is confined to `NOVA_SANDBOX` (default `/home/dev/PROJECT/NOVA_Project`) so the agent
-  can't read arbitrary system files.
-* `calculate` only permits arithmetic via an AST allow-list (no code exec).
-* The reasoning box populates only when the selected model/endpoint actually
-  returns a reasoning payload (e.g. Foundry's gpt-5 may not surface it on the
-  OpenAI-compatible route — the wiring is in place regardless).
-* Provider auth headers: Nova/Gemini/Cohere use `Authorization: Bearer`; Foundry uses
-  `api-key`.
+* **Proof of concept** for a personal lab. One shared passphrase — not multi-user
+  account management. Rotate `NOVA_AUTH_PASSPHRASE` to revoke access.
+* Cloud providers apply their own safety filters regardless of system prompts;
+  NovaSec is a bounded expert persona, not an uncensor. Only local Ollama is
+  uncensored, and it needs more RAM than a phone can give.
+* `read_file` is confined to `NOVA_SANDBOX` via real path containment;
+  `calculate` is an AST allow-list (no code execution); web tools are
+  read-only http(s) with short timeouts.
+* Phone deployment realities: ~8 GB RAM, no local LLMs; `termux-wake-lock` on;
+  named tunnel preferred over quick tunnels (stable URL); don't restart the
+  tunnel casually — quick tunnels rotate URLs.
+* Disaster recovery: see `README_RESTORE.md` (SSD backup → same phone, fresh
+  Termux, or fresh Linux box).
