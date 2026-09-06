@@ -295,6 +295,8 @@ export default function App() {
       setMessages(conv.messages || [])
       setErr('')
       setLastMeta(null)
+      setLiveReasoning('')
+      pendingRegenRef.current = false
       if (conv.provider && providers[conv.provider]) setProvider(conv.provider)
       if (conv.model) setModel(conv.model)
     } catch (e) {
@@ -329,6 +331,137 @@ export default function App() {
   }
 
   // ── chat ──
+  // Throttled live flush: streaming deltas and reasoning arrive faster than we
+  // want to re-render markdown, so buffer and paint at most every ~80ms.
+  const streamBufRef = useRef({ content: '', reasoning: '', timer: null })
+  const [liveReasoning, setLiveReasoning] = useState('')
+  // Edit-and-resend: when set, the next send replaces the old turn in history
+  // (backend regenerate flag) instead of appending a duplicate.
+  const pendingRegenRef = useRef(false)
+
+  const runTurn = async (baseMessages, cid, { regenerate = false } = {}) => {
+    setErr('')
+    setBusy(true)
+    setLastMeta(null)
+    setLiveReasoning('')
+    streamBufRef.current = { content: '', reasoning: '', timer: null }
+    setAtBottom(true)
+    const assistantIdx = baseMessages.length
+    setMessages([...baseMessages, { role: 'assistant', content: '' }])
+    // Personas compose as a per-request system message (Malayalam takes
+    // precedence and routes to Gemini); the backend forwards them verbatim.
+    const payload = {
+      messages: composePersonaMessages(baseMessages, { malayalamMode, securityMode }),
+      model: activeModel,
+      agent,
+      provider: activeProvider,
+      reasoning_effort: reasoningEffort || undefined,
+      conversation_id: cid,
+      api_key: getUIKey(activeProvider) || undefined,
+      // Persona-aware agent tools (NovaSec → recon set with the HTTP header probe).
+      tools_preset: agent ? (securityMode ? 'security' : toolsPreset) : undefined,
+      regenerate: regenerate || undefined,
+    }
+    const finalizeMeta = (ev) => {
+      setLastMeta({
+        model: ev.model,
+        provider: ev.provider,
+        reasoning: ev.reasoning,
+        trace: ev.trace || [],
+        usage: ev.usage,
+      })
+      setConversations((cs) => cs.map((c) =>
+        c.id === cid ? { ...c, preview: ev.content || '', title: ev.title || c.title } : c
+      ))
+    }
+    const clearStreamBuf = () => {
+      if (streamBufRef.current.timer) { clearTimeout(streamBufRef.current.timer); streamBufRef.current.timer = null }
+      streamBufRef.current = { content: '', reasoning: '', timer: null }
+    }
+    const flushLive = () => {
+      streamBufRef.current.timer = null
+      const buf = streamBufRef.current
+      setMessages((prev) => {
+        if (prev.length - 1 !== assistantIdx || prev[assistantIdx]?.role !== 'assistant') return prev
+        const cp = [...prev]
+        cp[assistantIdx] = { role: 'assistant', content: buf.content }
+        return cp
+      })
+      setLiveReasoning(buf.reasoning)
+    }
+    const scheduleFlush = () => {
+      if (streamBufRef.current.timer) return
+      streamBufRef.current.timer = setTimeout(flushLive, 80)
+    }
+
+    if (!agent) {
+      // Streaming path: token-by-token into a live assistant bubble, with the
+      // model's reasoning streaming into a live "Thinking…" panel. The Stop
+      // button aborts the fetch, which cancels the server-side generator
+      // before persistence — partial turns are not saved.
+      const ctl = new AbortController()
+      abortRef.current = ctl
+      await api.chatStream(
+        payload,
+        {
+          onDelta: (c) => { streamBufRef.current.content += c; scheduleFlush() },
+          onReasoning: (r) => { streamBufRef.current.reasoning += r; scheduleFlush() },
+          onDone: (ev) => {
+            clearStreamBuf()
+            setLiveReasoning('')
+            setMessages([...baseMessages, { role: 'assistant', content: ev.content ?? '', reasoning: ev.reasoning }])
+            finalizeMeta(ev)
+            setBusy(false)
+            abortRef.current = null
+          },
+          onAuthRequired: () => {
+            clearStreamBuf()
+            setLocked(true)
+            setBusy(false)
+            abortRef.current = null
+          },
+          onError: (msg) => {
+            const acc = streamBufRef.current.content
+            clearStreamBuf()
+            setErr(msg)
+            setMessages(acc ? [...baseMessages, { role: 'assistant', content: acc }] : baseMessages)
+            setLiveReasoning('')
+            setBusy(false)
+            abortRef.current = null
+          },
+          onAbort: () => {
+            const acc = streamBufRef.current.content
+            clearStreamBuf()
+            setMessages([...baseMessages, { role: 'assistant', content: acc + ' …[stopped]' }])
+            setLiveReasoning('')
+            setBusy(false)
+            abortRef.current = null
+          },
+        },
+        ctl.signal
+      )
+      return
+    }
+
+    // Agent mode keeps the non-streaming multi-round tool endpoint (also
+    // abortable now via the same Stop button).
+    try {
+      const ctl = new AbortController()
+      abortRef.current = ctl
+      const data = await api.chat(payload, ctl.signal)
+      setMessages([...baseMessages, { role: 'assistant', content: data.content, reasoning: data.reasoning }])
+      finalizeMeta(data)
+      setLastMeta((m) => ({ ...m, trace: data.trace || [] }))
+    } catch (e) {
+      if (e?.name === 'AbortError') setMessages(baseMessages)
+      else if (e?.name === 'AuthError') setLocked(true)
+      else setErr(e.message)
+    } finally {
+      setBusy(false)
+      abortRef.current = null
+    }
+  }
+
   const send = async () => {
     const text = input.trim()
     if ((!text && attachedImages.length === 0) || busy) return
@@ -346,7 +479,6 @@ export default function App() {
       }
     }
 
-    setErr('')
     const userContent = attachedImages.length
       ? [
           ...(text ? [{ type: 'text', text }] : []),
@@ -360,101 +492,37 @@ export default function App() {
     setMessages(next)
     updateInput('')
     setAttachedImages([])
-    setAtBottom(true)
-    setBusy(true)
-    setLastMeta(null)
-    // Personas compose as a per-request system message (Malayalam takes
-    // precedence and routes to Gemini); the backend forwards them verbatim.
-    const sendMessages = composePersonaMessages(next, { malayalamMode, securityMode })
-    const payload = {
-      messages: sendMessages,
-      model: activeModel,
-      agent,
-      provider: activeProvider,
-      reasoning_effort: reasoningEffort || undefined,
-      conversation_id: cid,
-      api_key: getUIKey(activeProvider) || undefined,
-      // Persona-aware agent tools (NovaSec → recon set with the HTTP header probe).
-      tools_preset: agent ? (securityMode ? 'security' : toolsPreset) : undefined,
-    }
-    const assistantIdx = next.length
-    const finalizeMeta = (ev) => {
-      setLastMeta({
-        model: ev.model,
-        provider: ev.provider,
-        reasoning: ev.reasoning,
-        trace: ev.trace || [],
-        usage: ev.usage,
-      })
-      setConversations((cs) => cs.map((c) =>
-        c.id === cid ? { ...c, preview: ev.content || '', title: ev.title || c.title } : c
-      ))
-    }
+    const isRegen = pendingRegenRef.current
+    pendingRegenRef.current = false
+    await runTurn(next, cid, { regenerate: isRegen })
+  }
 
-    if (!agent) {
-      // Streaming path: token-by-token into a live assistant bubble.
-      // The Stop button aborts the fetch, which cancels the server-side
-      // generator before persistence — partial turns are not saved.
-      let acc = ''
-      const ctl = new AbortController()
-      abortRef.current = ctl
-      setMessages([...next, { role: 'assistant', content: '' }])
-      await api.chatStream(
-        payload,
-        {
-          onDelta: (c) => {
-            acc += c
-            setMessages((prev) => {
-              const cp = [...prev]
-              cp[assistantIdx] = { role: 'assistant', content: acc }
-              return cp
-            })
-          },
-          onDone: (ev) => {
-            setMessages([...next, { role: 'assistant', content: ev.content ?? acc, reasoning: ev.reasoning }])
-            finalizeMeta(ev)
-            setBusy(false)
-            abortRef.current = null
-          },
-          onAuthRequired: () => {
-            setLocked(true)
-            setBusy(false)
-            abortRef.current = null
-          },
-          onError: (msg) => {
-            setErr(msg)
-            setMessages(acc ? [...next, { role: 'assistant', content: acc }] : next)
-            setBusy(false)
-            abortRef.current = null
-          },
-          onAbort: () => {
-            setMessages([...next, { role: 'assistant', content: acc + ' …[stopped]' }])
-            setBusy(false)
-            abortRef.current = null
-          },
-        },
-        ctl.signal
-      )
-      return
-    }
+  // Re-run the last exchange: drop the trailing reply from view and ask the
+  // backend to replace the old turn in history instead of duplicating it.
+  const regenerateLast = async () => {
+    if (busy || !currentId) return
+    const msgs = [...messages]
+    while (msgs.length && msgs[msgs.length - 1].role === 'assistant') msgs.pop()
+    if (!msgs.length || msgs[msgs.length - 1].role !== 'user') return
+    setMessages(msgs)
+    await runTurn(msgs, currentId, { regenerate: true })
+  }
 
-    // Agent mode keeps the non-streaming multi-round tool endpoint (also
-    // abortable now via the same Stop button).
-    try {
-      const ctl = new AbortController()
-      abortRef.current = ctl
-      const data = await api.chat(payload, ctl.signal)
-      setMessages([...next, { role: 'assistant', content: data.content, reasoning: data.reasoning }])
-      finalizeMeta(data)
-      setLastMeta((m) => ({ ...m, trace: data.trace || [] }))
-    } catch (e) {
-      if (e?.name === 'AbortError') setMessages(next)
-      else if (e?.name === 'AuthError') setLocked(true)
-      else setErr(e.message)
-    } finally {
-      setBusy(false)
-      abortRef.current = null
-    }
+  // Edit-and-resend: only the most recent user message is editable (the
+  // backend replace logic drops history from the last user turn onward).
+  const editMessage = (idx) => {
+    if (busy) return
+    const m = messages[idx]
+    if (!m || m.role !== 'user') return
+    const text = typeof m.content === 'string'
+      ? m.content
+      : (Array.isArray(m.content)
+        ? m.content.filter((b) => b?.type === 'text').map((b) => b.text || '').join('\n')
+        : '')
+    updateInput(text)
+    setMessages(messages.slice(0, idx))
+    pendingRegenRef.current = true
+    try { textareaRef.current?.focus() } catch {}
   }
 
   const stopGenerating = () => {
@@ -517,6 +585,11 @@ export default function App() {
   const displayModel = activeModel === 'auto' || !activeModel
     ? (providers[activeProvider]?.default || '')
     : activeModel
+  // Index of the most recent user message (edit-and-resend target).
+  let lastUserIdx = -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') { lastUserIdx = i; break }
+  }
 
   // Lock gate: render only the passphrase prompt until the API lets us in.
   if (locked) {
@@ -638,7 +711,13 @@ export default function App() {
                 </div>
               )}
               {messages.map((m, i) => (
-                <Message key={i} msg={m} streaming={busy && i === messages.length - 1 && m.role === 'assistant'} />
+                <Message
+                  key={i}
+                  msg={m}
+                  streaming={busy && i === messages.length - 1 && m.role === 'assistant'}
+                  onEdit={m.role === 'user' && i === lastUserIdx && !busy ? () => editMessage(i) : undefined}
+                  onRegenerate={m.role === 'assistant' && i === messages.length - 1 && !busy ? regenerateLast : undefined}
+                />
               ))}
 
               {busy && messages[messages.length - 1]?.role !== 'assistant' && (
@@ -659,6 +738,10 @@ export default function App() {
                 </div>
               )}
 
+              {/* live reasoning panel while a slow model is still thinking */}
+              {busy && liveReasoning && (
+                <div className="mx-3 sm:mx-6"><ReasoningBox reasoning={liveReasoning} streaming /></div>
+              )}
               {lastMeta?.reasoning && <div className="mx-3 sm:mx-6"><ReasoningBox reasoning={lastMeta.reasoning} /></div>}
               {lastMeta?.trace?.length > 0 && <div className="mx-3 sm:mx-6"><AgentTrace trace={lastMeta.trace} /></div>}
             </div>

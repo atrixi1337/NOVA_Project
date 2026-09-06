@@ -829,6 +829,7 @@ class ChatRequest(BaseModel):
     max_tool_rounds: int = Field(default=5, ge=1, le=10)
     conversation_id: Optional[str] = None  # save messages to this conversation
     tools_preset: Optional[str] = None  # agent mode: core | research | security (default: all tools)
+    regenerate: bool = False  # drop the last user+assistant turn from history before re-saving
 
 
 # ----------------------------------------------------------------------------
@@ -1563,6 +1564,20 @@ def db_save_message(
     conn.close()
 
 
+def db_drop_last_turn(cid: str) -> None:
+    """Regenerate support: delete messages from the last user turn onward, so a
+    regenerated exchange replaces the old one in history instead of duplicating it."""
+    conn = _db()
+    row = conn.execute(
+        "SELECT MAX(id) FROM messages WHERE conversation_id = ? AND role = 'user'",
+        (cid,),
+    ).fetchone()
+    if row and row[0]:
+        conn.execute("DELETE FROM messages WHERE conversation_id = ? AND id >= ?", (cid, row[0]))
+        conn.commit()
+    conn.close()
+
+
 # Initialize tables on import (idempotent, safe for containers).
 init_db()
 
@@ -1839,6 +1854,8 @@ def _prepare_chat(req: ChatRequest):
 async def chat(request: Request, req: ChatRequest):
     provider, api_key, messages, model = _prepare_chat(req)
     actor = getattr(request.state, "actor", "") or ""
+    if req.regenerate and req.conversation_id:
+        db_drop_last_turn(req.conversation_id)
     trace: List[Dict[str, Any]] = []
     eff = (req.reasoning_effort or "").strip().lower() or None
 
@@ -1991,6 +2008,8 @@ def _sse(obj: Dict[str, Any]) -> str:
 async def chat_stream(request: Request, req: ChatRequest):
     provider, api_key, messages, model = _prepare_chat(req)
     actor = getattr(request.state, "actor", "") or ""
+    if req.regenerate and req.conversation_id:
+        db_drop_last_turn(req.conversation_id)
     if req.agent:
         raise HTTPException(
             status_code=400,

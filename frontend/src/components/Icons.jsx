@@ -100,6 +100,14 @@ export const ArrowDown = svg(
   'M12 5v14m7-7l-7 7-7-7',
   { strokeWidth: 2 },
 )
+export const Refresh = svg(
+  'M21 12a9 9 0 11-2.64-6.36M21 3v6h-6',
+  { strokeWidth: 2 },
+)
+export const Pencil = svg(
+  'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7m-1.5-9.5l3 3L9 15l-4 1 1-4 9.5-9.5z',
+  { strokeWidth: 1.5 },
+)
 export const Shield = ({ className = 'w-5 h-5' }) => (
   <svg
     className={className}

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { renderMarkdown } from '../markdown.jsx'
-import { Copy, Check } from './Icons.jsx'
+import { Copy, Check, Pencil, Refresh } from './Icons.jsx'
 
 // SVG markup for the copy button in code block headers.
 // Both icons are stacked; the active one is toggled via the `.copied` class so
@@ -120,7 +120,7 @@ function messageText(content) {
   return ''
 }
 
-export default function Message({ msg, streaming = false }) {
+export default function Message({ msg, streaming = false, onEdit, onRegenerate }) {
   const isUser = msg.role === 'user'
   const hasContent = msg.content && (
     typeof msg.content === 'string'
@@ -150,17 +150,41 @@ export default function Message({ msg, streaming = false }) {
           {isUser ? 'You' : 'AI'}
         </div>
         <div className="relative min-w-0">
-          {/* hover action: copy the whole message */}
-          <button
-            onClick={copyMessage}
-            title="Copy message"
-            className={`absolute -top-3 z-10 flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-border bg-panel text-[10px] text-muted
-              opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-text hover:border-accent2/60 transition-opacity
-              ${isUser ? 'left-2' : 'right-2'}`}
+          {/* hover actions: copy always; edit on user msgs; retry on assistant */}
+          <div
+            className={`absolute -top-3 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity ${
+              isUser ? 'left-2' : 'right-2'
+            }`}
           >
-            {copied ? <Check className="w-3 h-3 text-ok" /> : <Copy className="w-3 h-3" />}
-            <span>{copied ? 'copied' : 'copy'}</span>
-          </button>
+            {isUser && onEdit && (
+              <button
+                onClick={onEdit}
+                title="Edit and resend"
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-border bg-panel text-[10px] text-muted hover:text-text hover:border-accent2/60 transition-colors"
+              >
+                <Pencil className="w-3 h-3" />
+                <span>edit</span>
+              </button>
+            )}
+            {!isUser && onRegenerate && (
+              <button
+                onClick={onRegenerate}
+                title="Regenerate reply"
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-border bg-panel text-[10px] text-muted hover:text-text hover:border-accent2/60 transition-colors"
+              >
+                <Refresh className="w-3 h-3" />
+                <span>retry</span>
+              </button>
+            )}
+            <button
+              onClick={copyMessage}
+              title="Copy message"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-border bg-panel text-[10px] text-muted hover:text-text hover:border-accent2/60 transition-colors"
+            >
+              {copied ? <Check className="w-3 h-3 text-ok" /> : <Copy className="w-3 h-3" />}
+              <span>{copied ? 'copied' : 'copy'}</span>
+            </button>
+          </div>
           <div
             className={`rounded-2xl px-4 py-3 text-[15px] leading-relaxed ${
               isUser ? 'bg-accent/10 border border-accent/20' : 'bg-panel2 border border-border'
