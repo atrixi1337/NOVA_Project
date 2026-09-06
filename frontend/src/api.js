@@ -140,6 +140,11 @@ export const api = {
   deleteConversation: (cid) => jdel(`/api/conversations/${cid}`),
   clearConversation: (cid) => jpost(`/api/conversations/${cid}/clear`, {}),
 
+  // inference gateway keys (OpenAI-compatible /v1 access)
+  gatewayKeys: () => jget('/api/gateway/keys'),
+  createGatewayKey: (name) => jpost('/api/gateway/keys', { name }),
+  revokeGatewayKey: (prefix) => jdel(`/api/gateway/keys/${prefix}`),
+
   // multipart analyze
   analyze: async (file, { mode, model, provider, reasoning_effort, api_key }) => {
     const fd = new FormData()

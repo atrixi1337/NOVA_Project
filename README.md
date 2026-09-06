@@ -61,6 +61,20 @@ credentials are detected and skipped honestly.
 converted server-side), Security or General mode, objective pre-stats computed
 before the LLM call.
 
+**Inference gateway** — a new **Gateway** tab mints revocable API keys
+(`sk-nova-…`, stored hashed, shown once) and tracks per-key usage. Any
+OpenAI-compatible agent (OpenCode, Aider, LangChain, curl…) then points at
+`<host>/v1` with `Authorization: Bearer sk-nova-…` and gets:
+
+- `GET /v1/models` — every provider's models as `provider/model` ids
+- `POST /v1/chat/completions` — non-streaming **and** SSE streaming, with
+  `temperature`/`max_tokens`/`top_p` passthrough
+- model format `provider/model` (e.g. `gemini/gemini-3.6-flash`; bare names
+  resolve on the default provider)
+- every call metered into the usage ledger as actor `gw:<key-name>` — per-key
+  tokens/calls appear right in the Gateway tab, and the Usage tab's by-person
+  table includes them. Rate limit applies per key.
+
 **Usage accounting** — every assistant turn lands in a `usage_ledger` that
 survives chat deletion: totals, by-model, by-provider, **by-person** (see auth),
 by-day sparkline, recent activity. Rendered in the app's **Usage** tab and on a
@@ -194,6 +208,9 @@ plain `uvicorn` (see `requirements.phone.txt`).
 | `POST /api/images` | text→image (gemini → cloudflare → foundry) |
 | `POST /api/analyze` | log/EVTX analysis (multipart) |
 | `GET/POST/PUT/DELETE /api/conversations…` | history CRUD + clear; `GET …/{cid}?last=N` paginates the most recent N messages (adds `total_messages`/`has_more` — the mobile-app-friendly shape) |
+| `POST/GET/DELETE /api/gateway/keys…` | mint / list / revoke inference-gateway API keys (owner) |
+| `GET /v1/models` | OpenAI-format model list (gateway key auth) |
+| `POST /v1/chat/completions` | OpenAI-compatible completions, streaming + non-streaming (gateway key auth) |
 | `GET/POST /api/ollama/*` | local Ollama status/load/unload |
 | `/`, `/usage`, `/mobile` | SPA, standalone dashboard, phone status page |
 

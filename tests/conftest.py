@@ -11,6 +11,7 @@ os.environ["NOVA_HISTORY_DB"] = tempfile.mktemp(prefix="nova-test-", suffix=".db
 os.environ.pop("NOVA_AUTH_PASSPHRASE", None)
 os.environ.pop("NOVA_AUTH_SECRET", None)
 os.environ.setdefault("INCEPTION_API_KEY", "test-key-inception")  # passes the key check; network is faked
+os.environ.setdefault("GEMINI_API_KEY", "test-key-gemini")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

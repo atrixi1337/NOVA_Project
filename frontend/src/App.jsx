@@ -11,6 +11,7 @@ import UsageDashboard from './components/UsageDashboard.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
 import Arena from './components/Arena.jsx'
+import GatewayTab from './components/GatewayTab.jsx'
 import LockScreen from './components/LockScreen.jsx'
 import { composePersonaMessages } from './personas.js'
 import { Sparkle, AttachmentPaperclip, Remove, SendSolid, Shield, ArrowDown, Globe } from './components/Icons.jsx'
@@ -43,7 +44,7 @@ const SECURITY_QUICK_PROMPTS = [
 ]
 
 // Tab ids (order matters for the tab bar).
-const TABS = ['chat', 'arena', 'analyzer', 'usage']
+const TABS = ['chat', 'arena', 'gateway', 'analyzer', 'usage']
 
 // NovaSec persona prompt also lives in personas.js.
 
@@ -598,7 +599,7 @@ export default function App() {
     items.push({ section: 'Actions', hint: 'new', label: 'New chat', run: () => { startNewChat() } })
     items.push({ section: 'Modes', hint: securityMode ? 'on' : 'off', label: securityMode ? 'Disable NovaSec' : 'Enable NovaSec', run: () => setSecurityMode((s) => !s) })
     items.push({ section: 'Modes', hint: malayalamMode ? 'on' : 'off', label: malayalamMode ? 'Disable Malayalam mode' : 'Enable Malayalam mode', run: () => setMalayalamMode((m) => !m) })
-    ;[['chat', 'Chat'], ['arena', 'Arena'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].forEach(([id, label]) =>
+    ;[['chat', 'Chat'], ['arena', 'Arena'], ['gateway', 'Gateway'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].forEach(([id, label]) =>
       items.push({ section: 'Navigate', hint: 'tab', label: `Go to ${label}`, run: () => setTab(id) }))
     Object.entries(providers).forEach(([pid, p]) =>
       items.push({ section: 'Providers', hint: 'switch', label: `Provider: ${p.label}`, run: () => switchProvider(pid) }))
@@ -676,7 +677,7 @@ export default function App() {
 
         {/* Tabs (shrink-0: a tall tab body must never squash the bar to zero) */}
         <div className="shrink-0 flex gap-0.5 sm:gap-1 px-2 sm:px-4 pt-2 border-b border-border bg-panel overflow-x-auto">
-          {[['chat', 'Chat'], ['arena', 'Arena'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].map(([id, label]) => (
+          {[['chat', 'Chat'], ['arena', 'Arena'], ['gateway', 'Gateway'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].map(([id, label]) => (
             <button
               key={id}
               onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
@@ -932,6 +933,8 @@ export default function App() {
             malayalamMode={malayalamMode}
             securityMode={securityMode}
           />
+        ) : tab === 'gateway' ? (
+          <GatewayTab />
         ) : tab === 'usage' ? (
           <div className="flex-1 min-h-0 overflow-y-auto">
             <UsageDashboard />

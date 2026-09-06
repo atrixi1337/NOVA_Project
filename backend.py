@@ -17,6 +17,7 @@ import io
 import base64
 import hashlib
 import hmac
+import secrets
 import sqlite3
 import uuid
 import xml.etree.ElementTree as ET
@@ -1022,6 +1023,236 @@ async def auth_login(login: AuthLogin, request: Request, response: Response):
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+# ----------------------------------------------------------------------------
+# Inference gateway: OpenAI-compatible /v1 endpoints with per-client API keys.
+# Agents (OpenCode, Aider, LangChain, curl…) point at <host>/v1 with a
+# Bearer sk-nova-… key and route into every provider via "provider/model".
+# ----------------------------------------------------------------------------
+def _hash_key(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _gateway_key_from_request(request: Request) -> Optional[Dict[str, Any]]:
+    """Validate the Authorization: Bearer gateway key. Returns the key row
+    (with name) or None. Also stamps last_used_at."""
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return None
+    raw = auth[7:].strip()
+    if not raw:
+        return None
+    kh = _hash_key(raw)
+    conn = _db()
+    row = conn.execute(
+        "SELECT key_hash, name, key_prefix, created_at, last_used_at, enabled FROM gateway_keys WHERE key_hash = ? AND enabled = 1",
+        (kh,),
+    ).fetchone()
+    if row:
+        conn.execute("UPDATE gateway_keys SET last_used_at = ? WHERE key_hash = ?", (time.time(), kh))
+        conn.commit()
+    conn.close()
+    return dict(row) if row else None
+
+
+def _require_owner(request: Request) -> None:
+    """Key management is owner-only when auth is on (open on local dev)."""
+    if _auth_enabled() and getattr(request.state, "actor", "") != "owner":
+        raise HTTPException(403, "Owner token required to manage gateway keys.")
+
+
+def _gateway_rate_limit(actor: str) -> None:
+    """Gateway keys always have their own auth, so the rate limit always applies."""
+    if NOVA_RATE_LIMIT_PER_MIN <= 0:
+        return
+    now = time.time()
+    hits = [t for t in _ACTOR_HITS.get(actor, []) if now - t < 60]
+    if len(hits) >= NOVA_RATE_LIMIT_PER_MIN:
+        raise HTTPException(429, f"Gateway rate limit reached ({NOVA_RATE_LIMIT_PER_MIN} req/min for '{actor}').")
+    hits.append(now)
+    _ACTOR_HITS[actor] = hits
+
+
+def _parse_gateway_model(model: str) -> tuple:
+    """'gemini/gemini-3.6-flash' -> (gemini, gemini-3.6-flash).
+    A bare model name resolves on the default provider; empty/unknown -> default."""
+    model = (model or "").strip()
+    if "/" in model:
+        prov_id, m = model.split("/", 1)
+        if prov_id in PROVIDERS:
+            return prov_id, (m or None)
+    return DEFAULT_PROVIDER, (model or None)
+
+
+class GatewayKeyCreate(BaseModel):
+    name: str = ""
+
+
+@app.post("/api/gateway/keys")
+async def create_gateway_key(request: Request, body: GatewayKeyCreate):
+    """Mint a new gateway API key. The raw key is returned ONCE (only its
+    SHA-256 hash is stored)."""
+    _require_owner(request)
+    name = (body.name or "").strip()[:40] or "unnamed"
+    raw = "sk-nova-" + secrets.token_hex(24)
+    conn = _db()
+    conn.execute(
+        "INSERT INTO gateway_keys (key_hash, name, key_prefix, created_at, enabled) VALUES (?, ?, ?, ?, 1)",
+        (_hash_key(raw), name, raw[:14], time.time()),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "name": name, "key": raw, "prefix": raw[:14]}
+
+
+@app.get("/api/gateway/keys")
+async def list_gateway_keys(request: Request):
+    """List gateway keys (never returns raw keys) with per-key usage."""
+    conn = _db()
+    rows = conn.execute(
+        """SELECT k.key_hash, k.name, k.key_prefix, k.created_at, k.last_used_at, k.enabled,
+                  COALESCE(SUM(CASE WHEN l.created_at >= ? THEN l.total_tokens END), 0) AS today_tokens,
+                  COALESCE(SUM(l.total_tokens), 0) AS total_tokens,
+                  COUNT(l.id) AS calls
+           FROM gateway_keys k
+           LEFT JOIN usage_ledger l ON l.actor = 'gw:' || k.name
+           GROUP BY k.key_hash
+           ORDER BY k.created_at DESC""",
+        (time.time() - 86400,),
+    ).fetchall()
+    conn.close()
+    return {"keys": [
+        {"name": r["name"], "prefix": r["key_prefix"], "created_at": r["created_at"],
+         "last_used_at": r["last_used_at"], "enabled": bool(r["enabled"]),
+         "today_tokens": r["today_tokens"] or 0, "total_tokens": r["total_tokens"] or 0,
+         "calls": r["calls"]}
+        for r in rows
+    ]}
+
+
+@app.delete("/api/gateway/keys/{key_prefix}")
+async def revoke_gateway_key(request: Request, key_prefix: str):
+    """Revoke (disable) a gateway key by its displayed prefix."""
+    _require_owner(request)
+    conn = _db()
+    cur = conn.execute("UPDATE gateway_keys SET enabled = 0 WHERE key_prefix = ?", (key_prefix,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(404, "Key not found.")
+    return {"ok": True, "revoked": key_prefix}
+
+
+class V1ChatCompletion(BaseModel):
+    """OpenAI-compatible chat completion request (unknown extras ignored)."""
+    model: str = ""
+    messages: List[Dict[str, Any]]
+    stream: bool = False
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    max_tokens: Optional[int] = None
+
+
+@app.get("/v1/models")
+async def v1_models(request: Request):
+    """OpenAI-format model list across all providers, as 'provider/model'."""
+    key = _gateway_key_from_request(request)
+    if not key:
+        raise HTTPException(401, "Invalid or missing gateway API key.")
+    data = []
+    for pid, p in PROVIDERS.items():
+        for m in p["models"]:
+            data.append({"id": f"{pid}/{m}", "object": "model", "owned_by": f"nova:{pid}"})
+        data.append({"id": f"{pid}/auto", "object": "model", "owned_by": f"nova:{pid}"})
+    return {"object": "list", "data": data}
+
+
+async def _gateway_stream(provider: str, model: str, requested: str, messages: List[Dict[str, Any]],
+                          extra: Dict[str, Any], actor: str):
+    """Relay the provider's OpenAI-format SSE stream to the client, tapping
+    usage from the final chunk for the ledger."""
+    prov = PROVIDERS[provider]
+    payload: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    payload.update({k: v for k, v in extra.items() if v is not None})
+    usage = None
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            async with client.stream(
+                "POST", f"{prov['base_url']}/chat/completions",
+                headers=nova_headers(api_key_for_gateway := _provider_key(provider), provider),
+                json=payload,
+            ) as resp:
+                if resp.status_code != 200:
+                    body = (await resp.aread()).decode("utf-8", "replace")
+                    err = json.dumps({"error": {"message": body[:300], "type": "gateway_upstream_error", "code": resp.status_code}})
+                    yield f"data: {err}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(chunk.get("usage"), dict) and chunk["usage"]:
+                        usage = chunk["usage"]
+                    # normalize the advertised model to what the client asked for
+                    chunk["model"] = requested
+                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+    except httpx.HTTPError as e:
+        err = json.dumps({"error": {"message": f"upstream error: {e}", "type": "gateway_error"}})
+        yield f"data: {err}\n\n"
+    db_record_usage(provider, model, usage, actor)
+    yield "data: [DONE]\n\n"
+
+
+@app.post("/v1/chat/completions")
+async def v1_chat_completions(request: Request, body: V1ChatCompletion):
+    """OpenAI-compatible chat completions backed by every configured provider.
+    Model format: 'provider/model' (e.g. gemini/gemini-3.6-flash); a bare model
+    name resolves on the default provider."""
+    key = _gateway_key_from_request(request)
+    if not key:
+        raise HTTPException(401, "Invalid or missing gateway API key.")
+    actor = f"gw:{key['name']}"
+    _gateway_rate_limit(actor)
+
+    provider, model = _parse_gateway_model(body.model)
+    model = _resolve_model(provider, model)
+    api_key = _provider_key(provider)
+    if not api_key:
+        raise HTTPException(400, f"No API key configured for provider '{provider}'.")
+    extra = {"temperature": body.temperature, "top_p": body.top_p, "max_tokens": body.max_tokens}
+    requested = f"{provider}/{model}"
+
+    if body.stream:
+        if provider == "cohere":
+            # cohere has no OpenAI SSE shape — degrade to a single chunk
+            data = await call_llm(body.messages, model, api_key, provider, None, None, extra)
+            db_record_usage(provider, model, data.get("usage"), actor)
+            chunk = {"id": data.get("id") or "gw", "object": "chat.completion.chunk",
+                     "model": requested,
+                     "choices": [{"index": 0, "delta": {"content": data["choices"][0]["message"].get("content") or ""}, "finish_reason": "stop"}]}
+            return StreamingResponse(
+                (f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n" for _ in (0,)),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache"},
+            )
+        return StreamingResponse(
+            _gateway_stream(provider, model, requested, body.messages, extra, actor),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    data = await call_llm(body.messages, model, api_key, provider, None, None, extra)
+    db_record_usage(provider, model, data.get("usage"), actor)
+    data["model"] = requested
+    return JSONResponse(data)
+
+
 def nova_headers(api_key: str, provider: str = "nova") -> Dict[str, str]:
     # Auth header per provider:
     #  - Azure Foundry:        api-key: <key>
@@ -1043,6 +1274,7 @@ async def call_llm(
     provider: str = "nova",
     tools: Optional[List[Dict[str, Any]]] = None,
     reasoning_effort: Optional[str] = None,
+    extra_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Send a chat completion to the chosen provider.
 
@@ -1067,6 +1299,9 @@ async def call_llm(
         "messages": messages,
         "stream": False,
     }
+    # Gateway passthrough (temperature / max_tokens / top_p …) — None values dropped.
+    if extra_params:
+        payload.update({k: v for k, v in extra_params.items() if v is not None})
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -1483,6 +1718,17 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_ledger(model);
         CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage_ledger(provider);
         CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_ledger(created_at DESC);
+
+        -- Inference gateway API keys (OpenAI-compatible /v1 access).
+        -- Only the SHA-256 hash is stored; the raw key is shown once at creation.
+        CREATE TABLE IF NOT EXISTS gateway_keys (
+            key_hash     TEXT PRIMARY KEY,
+            name         TEXT NOT NULL,
+            key_prefix   TEXT NOT NULL,
+            created_at   REAL NOT NULL,
+            last_used_at REAL,
+            enabled      INTEGER NOT NULL DEFAULT 1
+        );
         """
     )
     # Lightweight migration for the named-auth feature: attribute usage rows to
@@ -1688,6 +1934,28 @@ def db_drop_last_turn(cid: str) -> None:
     if row and row[0]:
         conn.execute("DELETE FROM messages WHERE conversation_id = ? AND id >= ?", (cid, row[0]))
         conn.commit()
+    conn.close()
+
+
+def db_record_usage(provider: str, model: str, usage: Optional[Dict], actor: str = "") -> None:
+    """Record a usage-ledger row without a conversation (inference gateway calls).
+    Persists across chat deletion like every ledger row."""
+    if not usage:
+        return
+    u = usage
+    conn = _db()
+    conn.execute(
+        """INSERT INTO usage_ledger
+           (conversation_id, role, provider, model,
+            prompt_tokens, completion_tokens, total_tokens,
+            reasoning_tokens, raw_usage, created_at, actor)
+           VALUES ('', 'assistant', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (provider or "", model or "",
+         u.get("prompt_tokens"), u.get("completion_tokens"), u.get("total_tokens"),
+         u.get("reasoning_tokens") or u.get("thinking_tokens") or u.get("reasoning_output_tokens"),
+         json.dumps(u), time.time(), actor or ""),
+    )
+    conn.commit()
     conn.close()
 
 

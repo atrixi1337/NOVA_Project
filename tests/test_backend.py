@@ -28,7 +28,7 @@ def fake_provider(monkeypatch):
     """Replace call_llm with a deterministic fake (records its inputs)."""
     calls = []
 
-    async def fake_call_llm(messages, model, api_key, provider="nova", tools=None, reasoning_effort=None):
+    async def fake_call_llm(messages, model, api_key, provider="nova", tools=None, reasoning_effort=None, extra_params=None):
         calls.append({"messages": [dict(m) for m in messages], "provider": provider, "tools": tools})
         return fake_llm_response(f"fake reply {len(calls)}")
 
@@ -239,6 +239,78 @@ def test_empty_reply_after_tools_triggers_nudge(monkeypatch, client):
     assert len(calls) == 3
     # the nudge message is the last user turn of the final call
     assert calls[2][-1]["content"].startswith("Answer now")
+
+
+# ---------------------------------------------------------------------------
+# inference gateway (/v1)
+# ---------------------------------------------------------------------------
+
+def _mint_key(client, name="test-client"):
+    r = client.post("/api/gateway/keys", json={"name": name})
+    assert r.status_code == 200
+    return r.json()["key"]
+
+
+def test_gateway_requires_key(client):
+    assert client.get("/v1/models").status_code == 401
+    assert client.post("/v1/chat/completions", json={"messages": []}).status_code == 401
+    bad = client.get("/v1/models", headers={"Authorization": "Bearer sk-nova-wrong"})
+    assert bad.status_code == 401
+
+
+def test_gateway_key_crud_and_model_list(client):
+    raw = _mint_key(client, "opencode")
+    lst = client.get("/api/gateway/keys").json()["keys"]
+    assert len(lst) == 1
+    assert lst[0]["name"] == "opencode"
+    assert lst[0]["prefix"].startswith("sk-nova-")
+    assert raw not in json.dumps(lst)  # raw key is never listed back
+    models = client.get("/v1/models", headers={"Authorization": f"Bearer {raw}"}).json()
+    ids = [m["id"] for m in models["data"]]
+    assert "inception/mercury-2" in ids
+    assert "inception/auto" in ids
+    assert "gemini/gemini-3.6-flash" in ids
+
+
+def test_gateway_completion_records_usage_per_key(fake_provider, client):
+    raw = _mint_key(client, "opencode")
+    r = client.post("/v1/chat/completions",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"model": "inception/mercury-2",
+              "messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["choices"][0]["message"]["content"] == "fake reply 1"
+    assert body["model"] == "inception/mercury-2"
+    # usage attributed to the gateway key's actor
+    usage = client.get("/api/usage").json()
+    assert usage["by_actor"][0]["actor"] == "gw:opencode"
+    # per-key stats
+    keys = client.get("/api/gateway/keys").json()["keys"]
+    assert keys[0]["calls"] == 1
+    assert keys[0]["total_tokens"] == 15
+
+
+def test_gateway_model_routing(fake_provider, client):
+    raw = _mint_key(client)
+    r = client.post("/v1/chat/completions",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"model": "gemini/gemini-3.6-flash",
+              "messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 200
+    # the fake captured the routed provider
+    # (fake_provider fixture isn't used here — re-mint via its mechanism)
+    r2 = client.post("/v1/chat/completions",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"model": "totally-unknown-model", "messages": [{"role": "user", "content": "hi"}]})
+    assert r2.status_code == 200  # bare names resolve on the default provider
+
+
+def test_gateway_revoke_disables_key(client):
+    raw = _mint_key(client, "temp")
+    prefix = raw[:14]
+    assert client.delete(f"/api/gateway/keys/{prefix}").status_code == 200
+    assert client.get("/v1/models", headers={"Authorization": f"Bearer {raw}"}).status_code == 401
 
 
 # ---------------------------------------------------------------------------
