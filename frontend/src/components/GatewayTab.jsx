@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { api } from '../api.js'
 import { Check, Copy, ChartBar, Remove } from './Icons.jsx'
 
@@ -39,8 +39,9 @@ function CopyBtn({ text, label = 'copy' }) {
 // Inference Gateway tab: mint/revoke API keys for the OpenAI-compatible /v1
 // endpoints and track per-key usage — so agents (OpenCode, Aider, curl, any
 // OpenAI client) can run inference through every provider.
-export default function GatewayTab() {
+export default function GatewayTab({ health }) {
   const [keys, setKeys] = useState([])
+  const [providers, setProviders] = useState({})
   const [busy, setBusy] = useState(false)
   const [name, setName] = useState('')
   const [newKey, setNewKey] = useState(null)
@@ -50,9 +51,26 @@ export default function GatewayTab() {
 
   const load = async () => {
     setBusy(true)
-    try { setKeys((await api.gatewayKeys()).keys || []) } catch (e) { setErr(e.message) } finally { setBusy(false) }
+    try {
+      const [keyRes, modelRes] = await Promise.all([api.gatewayKeys(), api.models().catch(() => ({}))])
+      setKeys(keyRes.keys || [])
+      setProviders(modelRes.providers || {})
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
   }
   useEffect(() => { load() }, [])
+
+  // model catalog grouped by provider, flagged by whether the server has a key
+  const groups = useMemo(() => Object.entries(providers).map(([pid, p]) => ({
+    pid,
+    label: p.label || pid,
+    configured: health?.providers?.[pid]?.configured !== false,
+    models: p.models || [],
+  })), [providers, health])
+  const totalModels = groups.reduce((n, g) => n + g.models.length + 1, 0) // +1 per provider for /auto
+  const configuredList = groups
+    .filter((g) => g.configured)
+    .flatMap((g) => ['auto', ...g.models].map((m) => `${g.pid}/${m}`))
+    .join('\n')
 
   const create = async () => {
     if (!name.trim() || busy) return
@@ -134,6 +152,44 @@ export default function GatewayTab() {
           Every call is metered to its key below — see the Usage tab for the full ledger.
           Streaming (`"stream": true`) is supported.
         </p>
+      </div>
+
+      {/* available models catalog */}
+      <div className="rounded-xl border border-border bg-panel2 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="font-semibold text-text text-[14px]">Available models ({totalModels})</div>
+          <CopyBtn text={configuredList} label="copy list" />
+        </div>
+        <div className="text-[11px] text-muted/60">
+          Use as <code className="px-0.5 rounded bg-black text-text2">"model": "provider/model"</code> in
+          requests. Greyed-out providers have no server key and will refuse inference.
+          "Copy list" copies only the working ones.
+        </div>
+        {groups.map((g) => (
+          <div key={g.pid}>
+            <div className="flex items-center gap-1.5 text-[11px] text-muted mb-1">
+              <span
+                className="w-1.5 h-1.5 rounded-full shrink-0"
+                style={{ background: g.configured ? '#3fd07a' : '#57534a' }}
+                title={g.configured ? 'configured' : 'no key on server'}
+              />
+              <span className={g.configured ? 'text-text2' : 'text-muted/60'}>{g.label}</span>
+              {!g.configured && <span className="text-err/70">· no key on server</span>}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {['auto', ...g.models].map((m) => (
+                <code
+                  key={m}
+                  className={`px-1.5 py-0.5 rounded bg-black border text-[10.5px] ${
+                    g.configured ? 'border-border text-text2' : 'border-border/50 text-muted/50 line-through'
+                  }`}
+                >
+                  {g.pid}/{m}
+                </code>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* create key */}

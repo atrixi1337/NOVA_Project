@@ -934,7 +934,7 @@ export default function App() {
             securityMode={securityMode}
           />
         ) : tab === 'gateway' ? (
-          <GatewayTab />
+          <GatewayTab health={health} />
         ) : tab === 'usage' ? (
           <div className="flex-1 min-h-0 overflow-y-auto">
             <UsageDashboard />
