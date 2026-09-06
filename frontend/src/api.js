@@ -134,7 +134,8 @@ export const api = {
   // conversation history
   conversations: () => jget('/api/conversations'),
   newConversation: (body = {}) => jpost('/api/conversations', body),
-  getConversation: (cid) => jget(`/api/conversations/${cid}`),
+  // last=N: only the most recent N messages (mobile-friendly pagination)
+  getConversation: (cid, last) => jget(last ? `/api/conversations/${cid}?last=${last}` : `/api/conversations/${cid}`),
   renameConversation: (cid, title) => jput(`/api/conversations/${cid}`, { title }),
   deleteConversation: (cid) => jdel(`/api/conversations/${cid}`),
   clearConversation: (cid) => jpost(`/api/conversations/${cid}/clear`, {}),

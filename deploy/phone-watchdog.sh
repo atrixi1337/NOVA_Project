@@ -16,6 +16,10 @@ LOCK="$APP_DIR/.watchdog.pid"
 HEALTH_URL="http://localhost:8000/api/health"
 CHECK_INTERVAL="${WATCHDOG_INTERVAL:-30}"
 FAIL_THRESHOLD="${WATCHDOG_THRESHOLD:-2}"
+# Optional push: set WATCHDOG_NTFY=https://ntfy.sh/your-secret-topic in .env
+NTFY_URL="${WATCHDOG_NTFY:-}"
+LOG_ROTATE_BYTES=$((5 * 1024 * 1024))   # rotate app/tunnel logs past 5 MB
+ROTATE_CHECK_INTERVAL=3600              # check sizes once an hour
 
 # --- single instance ---
 if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK")" 2>/dev/null; then
@@ -25,6 +29,28 @@ fi
 echo $$ > "$LOCK"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
+notify() {
+  # push an event if ntfy is configured (also leaves a copy in the log)
+  [ -n "$1" ] && log "notify: $1"
+  if [ -n "$NTFY_URL" ]; then
+    curl -sf --max-time 10 -d "$1" "$NTFY_URL" >/dev/null 2>&1 || true
+  fi
+}
+
+# copytruncate rotation: the running server keeps its fd, we snapshot then
+# truncate in place — no restart needed, no lost lines beyond the race window.
+rotate_logs() {
+  local f size
+  for f in "$APP_DIR/nova-app.log" "$APP_DIR/nova-tunnel.log"; do
+    [ -f "$f" ] || continue
+    size=$(stat -c%s "$f" 2>/dev/null || echo 0)
+    if [ "$size" -gt "$LOG_ROTATE_BYTES" ]; then
+      cp "$f" "$f.1" 2>/dev/null || true
+      : > "$f"
+      log "rotated $f ($((size / 1024 / 1024)) MB) -> $f.1"
+    fi
+  done
+}
 log "watchdog started (pid $$, interval ${CHECK_INTERVAL}s, threshold ${FAIL_THRESHOLD})"
 
 start_uvicorn() (
@@ -40,7 +66,13 @@ start_uvicorn() (
 )
 
 fails=0
+last_rotate=0
 while true; do
+  now=$(date +%s)
+  if [ $((now - last_rotate)) -ge "$ROTATE_CHECK_INTERVAL" ]; then
+    last_rotate=$now
+    rotate_logs
+  fi
   if curl -sf --max-time 10 "$HEALTH_URL" >/dev/null 2>&1; then
     fails=0
   else
@@ -59,8 +91,10 @@ while true; do
       done
       if [ "$ok" = 1 ]; then
         log "restart OK"
+        notify "Nova: uvicorn was down, watchdog restarted it OK"
       else
         log "restart FAILED — will retry next cycle"
+        notify "Nova: WATCHDOG RESTART FAILED — site may be down"
       fi
       fails=0
     fi

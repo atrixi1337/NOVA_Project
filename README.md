@@ -72,7 +72,11 @@ standalone `/usage` page. Latency-friendly: `/api/usage` accepts
   the actor → the Usage tab shows *who* burned what. Rotate the passphrase to
   revoke every device.
 - `/api/health` and `/api/auth/login` stay public; logins rate-limited
-  (5/min/IP); wildcard CORS removed (the SPA is same-origin).
+  (5/min/IP); wildcard CORS removed (the SPA is same-origin). With auth on,
+  chat endpoints also get a **per-actor rate limit**
+  (`NOVA_RATE_LIMIT_PER_MIN`, default 60/min) and an optional **daily token
+  cap** (`NOVA_DAILY_TOKEN_CAP`, 0 = off) so one tester's runaway loop can't
+  burn the keys.
 
 ## Providers (17)
 
@@ -100,14 +104,23 @@ cp .env.example .env                   # fill in the keys you have
 uvicorn backend:app --host 0.0.0.0 --port 8000
 ```
 
-Open http://localhost:8000. To rebuild the UI after changing `frontend/src`:
+Open http://localhost:8000. Run the stability tests (no network needed —
+providers are faked):
+
+```bash
+python3 -m pytest tests/ -q
+```
+
+To rebuild the UI after changing `frontend/src`:
 
 ```bash
 cd frontend && npm install && npx vite build   # outputs to ../static
 ```
 
 FastAPI serves `static/` from disk per request — **frontend-only changes need no
-server restart; `backend.py` changes do.**
+server restart; `backend.py` changes do.** The SPA is an installable **PWA**:
+service worker (`public/sw.js`) caches the app shell for offline loads and the
+manifest enables "Add to home screen".
 
 ### Android phone (Termux) — the primary deployment
 
@@ -122,7 +135,10 @@ nohup bash ~/NOVA_Project/deploy/phone-watchdog.sh >/dev/null 2>&1 &   # auto-re
 ```
 
 The watchdog checks `/api/health` every 30 s and restarts uvicorn after 2
-consecutive failures (pid-locked, safe in `~/.termux/boot/start-nova.sh`).
+consecutive failures (pid-locked, safe in `~/.termux/boot/start-nova.sh`). It
+also **rotates the app/tunnel logs** past 5 MB (copytruncate) and — if
+`WATCHDOG_NTFY=https://ntfy.sh/<topic>` is set in the phone's `.env` — pushes
+a notification whenever it has to intervene.
 
 ### Nightly backups (from a machine with SSH access to the phone)
 
@@ -167,12 +183,13 @@ plain `uvicorn` (see `requirements.phone.txt`).
 | `POST /api/chat` | non-streaming chat + agent tool loop |
 | `POST /api/chat/stream` | SSE streaming chat (agent mode stays on `/api/chat`) |
 | `POST /api/auth/login` | passphrase → 30-day cookie (public) |
+| `POST /api/admin/restart` | owner-token bounce; the watchdog restores service (≤90 s) |
 | `GET /api/health` | liveness + provider config (public) |
 | `GET /api/models` | provider registry + model lists |
 | `GET /api/usage` | lifetime ledger aggregates (`?provider=&days=&recent=1`) |
 | `POST /api/images` | text→image (gemini → cloudflare → foundry) |
 | `POST /api/analyze` | log/EVTX analysis (multipart) |
-| `GET/POST/PUT/DELETE /api/conversations…` | history CRUD + clear |
+| `GET/POST/PUT/DELETE /api/conversations…` | history CRUD + clear; `GET …/{cid}?last=N` paginates the most recent N messages (adds `total_messages`/`has_more` — the mobile-app-friendly shape) |
 | `GET/POST /api/ollama/*` | local Ollama status/load/unload |
 | `/`, `/usage`, `/mobile` | SPA, standalone dashboard, phone status page |
 

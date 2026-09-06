@@ -864,6 +864,12 @@ AUTH_COOKIE = "nova_session"
 AUTH_TTL_S = 30 * 86400
 _LOGIN_FAILS: Dict[str, List[float]] = {}
 
+# ---- per-actor abuse guards (active only when auth is enabled) --------------
+# Shared deployments: one tester's runaway loop must not burn everyone's keys.
+NOVA_RATE_LIMIT_PER_MIN = int(os.getenv("NOVA_RATE_LIMIT_PER_MIN", "60"))  # 0 = off
+NOVA_DAILY_TOKEN_CAP = int(os.getenv("NOVA_DAILY_TOKEN_CAP", "0"))        # 0 = off
+_ACTOR_HITS: Dict[str, List[float]] = {}
+
 
 def _auth_enabled() -> bool:
     return bool(AUTH_TOKENS)
@@ -910,6 +916,55 @@ async def auth_middleware(request: Request, call_next):
 
 class AuthLogin(BaseModel):
     passphrase: str = ""
+
+
+def _check_actor_limits(request: Request) -> None:
+    """Rate limit + optional daily token cap, per authenticated actor.
+    No-ops when auth is disabled (single-user local use)."""
+    if not _auth_enabled():
+        return
+    actor = getattr(request.state, "actor", "") or "anon"
+    now = time.time()
+    if NOVA_RATE_LIMIT_PER_MIN > 0:
+        hits = [t for t in _ACTOR_HITS.get(actor, []) if now - t < 60]
+        if len(hits) >= NOVA_RATE_LIMIT_PER_MIN:
+            raise HTTPException(
+                429,
+                f"Rate limit reached ({NOVA_RATE_LIMIT_PER_MIN} req/min for '{actor}'). Slow down.",
+            )
+        hits.append(now)
+        _ACTOR_HITS[actor] = hits
+    if NOVA_DAILY_TOKEN_CAP > 0:
+        conn = _db()
+        row = conn.execute(
+            "SELECT COALESCE(SUM(total_tokens),0) FROM usage_ledger WHERE actor = ? AND created_at >= ?",
+            (actor, now - 86400),
+        ).fetchone()
+        conn.close()
+        if (row[0] or 0) >= NOVA_DAILY_TOKEN_CAP:
+            raise HTTPException(
+                429,
+                f"Daily token cap reached for '{actor}' ({NOVA_DAILY_TOKEN_CAP} tokens/24h).",
+            )
+
+
+@app.post("/api/admin/restart")
+async def admin_restart(request: Request):
+    """Mission-control hook: bounce uvicorn and let the watchdog revive it
+    (<=90s downtime). Only the 'owner' actor — restarts are privileged."""
+    if not _auth_enabled():
+        raise HTTPException(403, "Admin restart requires auth to be enabled.")
+    if getattr(request.state, "actor", "") != "owner":
+        raise HTTPException(403, "Only the owner token can restart the service.")
+    import subprocess
+    # Fire-and-forget: respond first, then exit; phone-watchdog.sh brings the
+    # service back. (Bracket pattern so the shell can't pkill itself.)
+    subprocess.Popen(
+        "sleep 1; pkill -f '[u]vicorn backend:app'",
+        shell=True, start_new_session=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    return {"ok": True, "detail": "Restarting; the watchdog restores service within ~90s."}
 
 
 @app.post("/api/auth/login")
@@ -1447,7 +1502,10 @@ def db_list_conversations() -> List[Dict[str, Any]]:
     ]
 
 
-def db_get_conversation(cid: str) -> Optional[Dict[str, Any]]:
+def db_get_conversation(cid: str, last: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """Full conversation, or (when `last=N`) only the most recent N messages —
+    the mobile-app-friendly shape. Paginated responses add total_messages and
+    has_more so a client can offer 'load earlier'."""
     conn = _db()
     conv = conn.execute(
         "SELECT id, title, provider, model, created_at, updated_at FROM conversations WHERE id = ?",
@@ -1456,19 +1514,34 @@ def db_get_conversation(cid: str) -> Optional[Dict[str, Any]]:
     if conv is None:
         conn.close()
         return None
-    msgs = conn.execute(
-        "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC", (cid,)
-    ).fetchall()
+    total = None
+    if last and last > 0:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id = ?", (cid,)
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+            (cid, last),
+        ).fetchall()
+        rows = list(reversed(rows))
+    else:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC", (cid,)
+        ).fetchall()
     conn.close()
-    return {
+    result = {
         "id": conv["id"],
         "title": conv["title"],
         "provider": conv["provider"],
         "model": conv["model"],
         "created_at": conv["created_at"],
         "updated_at": conv["updated_at"],
-        "messages": [_row_to_msg(m) for m in msgs],
+        "messages": [_row_to_msg(m) for m in rows],
     }
+    if last:
+        result["total_messages"] = total
+        result["has_more"] = total > len(rows)
+    return result
 
 
 def db_get_conversation_title(cid: str) -> Optional[str]:
@@ -1716,8 +1789,10 @@ async def new_conversation(req: Optional[Dict[str, Any]] = None):
 
 
 @app.get("/api/conversations/{cid}")
-async def get_conversation(cid: str):
-    conv = db_get_conversation(cid)
+async def get_conversation(cid: str, last: Optional[int] = None):
+    """Full conversation, or `?last=N` for the most recent N messages
+    (response gains total_messages + has_more for 'load earlier')."""
+    conv = db_get_conversation(cid, last=last)
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     return conv
@@ -1852,6 +1927,7 @@ def _prepare_chat(req: ChatRequest):
 
 @app.post("/api/chat")
 async def chat(request: Request, req: ChatRequest):
+    _check_actor_limits(request)
     provider, api_key, messages, model = _prepare_chat(req)
     actor = getattr(request.state, "actor", "") or ""
     if req.regenerate and req.conversation_id:
@@ -2006,6 +2082,7 @@ def _sse(obj: Dict[str, Any]) -> str:
 
 @app.post("/api/chat/stream")
 async def chat_stream(request: Request, req: ChatRequest):
+    _check_actor_limits(request)
     provider, api_key, messages, model = _prepare_chat(req)
     actor = getattr(request.state, "actor", "") or ""
     if req.regenerate and req.conversation_id:

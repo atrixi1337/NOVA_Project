@@ -290,7 +290,7 @@ export default function App() {
     if (busy) return
     setBusy(true)
     try {
-      const conv = await api.getConversation(cid)
+      const conv = await api.getConversation(cid, 200)
       setCurrentId(conv.id)
       setMessages(conv.messages || [])
       setErr('')
