@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { renderMarkdown } from '../markdown.jsx'
+import { Copy, Check } from './Icons.jsx'
 
-// SVG markup for inline copy buttons injected into rendered <pre> blocks.
+// SVG markup for the copy button in code block headers.
 // Both icons are stacked; the active one is toggled via the `.copied` class so
 // the clip reads the code's text directly (SVG icons contribute nothing to
 // innerText, so no fragile text-stripping is required).
@@ -17,9 +18,49 @@ const CHECK_ICON =
   'd="M5 13l4 4L19 7" />' +
   '</svg>'
 
-// Renders markdown for assistant messages, attaching a copy-to-clipboard button
-// to every <pre><code> block. The button is injected after first paint via a
-// ref effect (React can't manage children rendered through dangerouslySetInnerHTML).
+// Wrap every rendered <pre> in a .codeblock with a header bar showing the
+// detected language + an always-visible copy button. React can't manage
+// children rendered through dangerouslySetInnerHTML, so this DOM surgery runs
+// after each render of new markdown (same pattern as the old inline copy btn).
+function enhanceCodeBlocks(root) {
+  root.querySelectorAll('pre').forEach((pre) => {
+    if (pre.parentElement?.classList.contains('codeblock')) return
+    const code = pre.querySelector('code')
+    let lang = ''
+    if (code) {
+      const m = (code.className || '').match(/language-([\w+#.-]+)/)
+      if (m) lang = m[1]
+    }
+    const wrap = document.createElement('div')
+    wrap.className = 'codeblock'
+
+    const head = document.createElement('div')
+    head.className = 'codeblock-head'
+
+    const label = document.createElement('span')
+    label.className = 'codeblock-lang'
+    label.textContent = lang || 'code'
+
+    const btn = document.createElement('button')
+    btn.className = 'copy-btn'
+    btn.title = 'Copy code'
+    btn.innerHTML = COPY_ICON + CHECK_ICON
+    btn.onclick = () => {
+      navigator.clipboard?.writeText((code ? code.innerText : pre.innerText) || '')
+      btn.classList.add('copied')
+      setTimeout(() => btn.classList.remove('copied'), 2000)
+    }
+
+    head.appendChild(label)
+    head.appendChild(btn)
+    pre.replaceWith(wrap)
+    wrap.appendChild(head)
+    wrap.appendChild(pre)
+  })
+}
+
+// Renders markdown for assistant messages, then attaches the code-block
+// header bars (language + copy) via the effect below.
 function Markdown({ content }) {
   const html = renderMarkdown(content)
   const ref = useRef(null)
@@ -27,20 +68,7 @@ function Markdown({ content }) {
   useEffect(() => {
     const root = ref.current
     if (!root) return
-    root.querySelectorAll('pre').forEach((pre) => {
-      if (pre.querySelector('.copy-btn')) return
-      const btn = document.createElement('button')
-      btn.className = 'copy-btn'
-      btn.title = 'Copy code'
-      btn.innerHTML = COPY_ICON + CHECK_ICON
-      btn.onclick = () => {
-        const code = pre.querySelector('code')
-        navigator.clipboard?.writeText((code ? code.innerText : pre.innerText) || '')
-        btn.classList.add('copied')
-        setTimeout(() => btn.classList.remove('copied'), 2000)
-      }
-      pre.appendChild(btn)
-    })
+    enhanceCodeBlocks(root)
   }, [html])
 
   return <div className="md" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />
@@ -73,6 +101,18 @@ function UserContent({ content }) {
   return <div className="whitespace-pre-wrap overflow-wrap-anywhere">{content}</div>
 }
 
+// Flatten any message content shape to plain text (for the copy action).
+function messageText(content) {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .filter((b) => b?.type === 'text')
+      .map((b) => b.text || '')
+      .join('\n')
+  }
+  return ''
+}
+
 export default function Message({ msg }) {
   const isUser = msg.role === 'user'
   const hasContent = msg.content && (
@@ -80,9 +120,18 @@ export default function Message({ msg }) {
       ? msg.content.trim()
       : Array.isArray(msg.content) && msg.content.length > 0
   )
+  const [copied, setCopied] = useState(false)
+
+  const copyMessage = async () => {
+    try {
+      await navigator.clipboard.writeText(messageText(msg.content))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {}
+  }
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} px-3 sm:px-6`}>
+    <div className={`group relative flex ${isUser ? 'justify-end' : 'justify-start'} px-3 sm:px-6 msg-in`}>
       <div
         className={`max-w-[820px] w-full flex gap-3 items-start ${isUser ? 'flex-row-reverse' : ''}`}
       >
@@ -93,18 +142,31 @@ export default function Message({ msg }) {
         >
           {isUser ? 'You' : 'AI'}
         </div>
-        <div
-          className={`rounded-2xl px-4 py-3 text-[15px] leading-relaxed ${
-            isUser ? 'bg-accent/10 border border-accent/20' : 'bg-panel2 border border-border'
-          }`}
-        >
-          {isUser ? (
-            <UserContent content={msg.content} />
-          ) : hasContent ? (
-            <Markdown content={msg.content} />
-          ) : (
-            <div className="text-muted italic">…thinking</div>
-          )}
+        <div className="relative min-w-0">
+          {/* hover action: copy the whole message */}
+          <button
+            onClick={copyMessage}
+            title="Copy message"
+            className={`absolute -top-3 z-10 flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-border bg-panel text-[10px] text-muted
+              opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-text hover:border-accent2/60 transition-opacity
+              ${isUser ? 'left-2' : 'right-2'}`}
+          >
+            {copied ? <Check className="w-3 h-3 text-ok" /> : <Copy className="w-3 h-3" />}
+            <span>{copied ? 'copied' : 'copy'}</span>
+          </button>
+          <div
+            className={`rounded-2xl px-4 py-3 text-[15px] leading-relaxed ${
+              isUser ? 'bg-accent/10 border border-accent/20' : 'bg-panel2 border border-border'
+            }`}
+          >
+            {isUser ? (
+              <UserContent content={msg.content} />
+            ) : hasContent ? (
+              <Markdown content={msg.content} />
+            ) : (
+              <div className="text-muted italic">…thinking</div>
+            )}
+          </div>
         </div>
       </div>
     </div>

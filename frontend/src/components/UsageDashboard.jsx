@@ -3,6 +3,10 @@ import { api } from '../api.js'
 import { ChartBar, Clock } from './Icons.jsx'
 
 const fmt = (n) => (typeof n === 'number' ? n.toLocaleString() : '—')
+// Compact token counter for cards/tables: 27316 -> 27.3k (exact value in title).
+const fmtTok = (n) => (typeof n === 'number'
+  ? (n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : n.toLocaleString())
+  : '—')
 const lab = (s) => (s || s === 0 ? s : '—')
 const short = (s, n = 28) => (!s ? '—' : s.length > n ? s.slice(0, n) + '…' : s)
 const ts = (t) => (!t ? '—' : new Date(t * 1000).toLocaleString())
@@ -28,6 +32,7 @@ export default function UsageDashboard() {
   const total = data?.total || {}
   const models = data?.by_model || []
   const providers = data?.by_provider || []
+  const byDay = data?.by_day || []
   const recent = data?.recent || []
 
   return (
@@ -54,11 +59,23 @@ export default function UsageDashboard() {
 
       {/* Totals */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <CardStat label="Prompt tokens" value={fmt(total.prompt_tokens)} />
-        <CardStat label="Completion tokens" value={fmt(total.completion_tokens)} />
-        <CardStat label="Total tokens" value={fmt(total.total_tokens)} />
+        <CardStat label="Prompt tokens" value={fmtTok(total.prompt_tokens)} title={fmt(total.prompt_tokens)} />
+        <CardStat label="Completion tokens" value={fmtTok(total.completion_tokens)} title={fmt(total.completion_tokens)} />
+        <CardStat label="Total tokens" value={fmtTok(total.total_tokens)} title={fmt(total.total_tokens)} />
         <CardStat label="LLM calls" value={fmt(total.calls)} note="recorded in usage ledger" />
       </div>
+
+      {/* Daily sparkline (data already comes from /api/usage by_day) */}
+      {byDay.length >= 2 && (
+        <Card title="Tokens · last 30 days" icon={<ChartBar className="w-4 h-4 text-accent" />}>
+          <Sparkline points={byDay.slice(0, 30).reverse().map((d) => d.total_tokens || 0)} />
+          <div className="flex justify-between text-[10px] text-muted">
+            <span>{byDay.slice(0, 30).reverse()[0]?.date}</span>
+            <span>peak {fmtTok(Math.max(...byDay.slice(0, 30).map((d) => d.total_tokens || 0)))}</span>
+            <span>{byDay[0]?.date}</span>
+          </div>
+        </Card>
+      )}
 
       {/* By model */}
       <Card title="Token usage by model" icon={<ChartBar className="w-4 h-4 text-accent2" />}>
@@ -66,8 +83,8 @@ export default function UsageDashboard() {
           cols={['Provider', 'Model', 'Prompt', 'Completion', 'Total', 'Calls']}
           rows={models.map((m) => [
             lab(m.provider), short(m.model, 32),
-            fmt(m.prompt_tokens), fmt(m.completion_tokens),
-            fmt(m.total_tokens), fmt(m.calls),
+            fmtTok(m.prompt_tokens), fmtTok(m.completion_tokens),
+            fmtTok(m.total_tokens), fmt(m.calls),
           ])}
           empty="No usage recorded yet."
         />
@@ -78,8 +95,8 @@ export default function UsageDashboard() {
           <Table
             cols={['Provider', 'Prompt', 'Completion', 'Total', 'Calls']}
             rows={providers.map((p) => [
-              lab(p.provider), fmt(p.prompt_tokens), fmt(p.completion_tokens),
-              fmt(p.total_tokens), fmt(p.calls),
+              lab(p.provider), fmtTok(p.prompt_tokens), fmtTok(p.completion_tokens),
+              fmtTok(p.total_tokens), fmt(p.calls),
             ])}
             empty="No usage recorded yet."
           />
@@ -88,7 +105,7 @@ export default function UsageDashboard() {
           <Table
             cols={['Time', 'Provider', 'Model', 'Total']}
             rows={recent.slice(0, 12).map((r, i) => [
-              ts(r.created_at), lab(r.provider), short(r.model, 24), fmt(r.total_tokens),
+              ts(r.created_at), lab(r.provider), short(r.model, 24), fmtTok(r.total_tokens),
             ])}
             empty="No calls logged yet."
           />
@@ -114,13 +131,32 @@ function Card({ title, icon, children }) {
   )
 }
 
-function CardStat({ label, value, note }) {
+function CardStat({ label, value, note, title }) {
   return (
-    <div className="rounded-xl border border-border bg-panel2 p-3">
+    <div className="rounded-xl border border-border bg-panel2 p-3" title={title || undefined}>
       <div className="text-[11px] uppercase text-muted tracking-wider">{label}</div>
       <div className="text-[22px] font-medium text-text2 mt-0.5">{value}</div>
       {note && <div className="text-[10px] text-muted mt-0.5">{note}</div>}
     </div>
+  )
+}
+
+// Dependency-free SVG sparkline of total tokens per day (oldest → newest).
+function Sparkline({ points = [] }) {
+  if (!points.length) return null
+  const w = 560, h = 90, pad = 6
+  const max = Math.max(...points, 1)
+  const step = points.length > 1 ? (w - pad * 2) / (points.length - 1) : 0
+  const coords = points.map((v, i) => [pad + i * step, h - pad - (v / max) * (h - pad * 2)])
+  const path = coords.map((c, i) => `${i ? 'L' : 'M'}${c[0].toFixed(1)},${c[1].toFixed(1)}`).join(' ')
+  const last = coords[coords.length - 1]
+  const area = `${path} L${last[0].toFixed(1)},${h - pad} L${pad},${h - pad} Z`
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-24" preserveAspectRatio="none" role="img" aria-label="Daily token usage">
+      <path d={area} fill="rgba(201,162,39,0.12)" />
+      <path d={path} fill="none" stroke="#c9a227" strokeWidth="2" />
+      <circle cx={last[0]} cy={last[1]} r="3" fill="#c9a227" />
+    </svg>
   )
 }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { api } from './api.js'
 import { getUIKey } from './components/SettingsModal.jsx'
 import Sidebar from './components/Sidebar.jsx'
@@ -9,7 +9,8 @@ import ReasoningBox from './components/ReasoningBox.jsx'
 import Analyzer from './components/Analyzer.jsx'
 import UsageDashboard from './components/UsageDashboard.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
-import { Sparkle, AttachmentPaperclip, Remove, SendSolid, Shield } from './components/Icons.jsx'
+import CommandPalette from './components/CommandPalette.jsx'
+import { Sparkle, AttachmentPaperclip, Remove, SendSolid, Shield, ArrowDown } from './components/Icons.jsx'
 
 // Malayalam mode: route chats through the Gemini provider (multilingual, strong
 // Malayalam) and prepend a system instruction so the model replies only in
@@ -46,6 +47,24 @@ const QUICK_PROMPTS = [
   'Summarize these firewall rules for review',
 ]
 
+// Mode-aware starter prompts: the empty state rotates these in when the
+// matching mode is active, instead of always showing the SOC-English set.
+const MALAYALAM_QUICK_PROMPTS = [
+  'ലോഗ് ഫയൽ ഒന്ന് analyse ചെയ്യണം — എങ്ങനെ?',
+  'Oru Python script brute-force detect cheyyan ezhuthoo',
+  'CVE-2024-3400 enthu aanu? Ellararkkum mansilavume parayoo',
+  'Firewall rules review-inu vendi summarize cheyyamo',
+]
+const SECURITY_QUICK_PROMPTS = [
+  'Threat-model this web app: top 5 risks and mitigations',
+  'Review this snippet for injection vulnerabilities',
+  'Linux privesc checklist for a CTF box',
+  'SIEM query to hunt lateral movement (KQL)',
+]
+
+// Tab ids (order matters for the tab bar).
+const TABS = ['chat', 'analyzer', 'usage']
+
 // Security Mode (NovaSec): swap the model instructions into a cybersecurity-expert
 // persona via a per-request system message. The backend forwards `role: system`
 // verbatim and skips its own default prompt when one is present, so this persona
@@ -72,7 +91,17 @@ const SECURITY_MODE_SYSTEM_PROMPT =
   'their own safety filters, so some restricted content may be refused regardless.'
 
 export default function App() {
-  const [tab, setTab] = useState('chat')
+  // Last active tab persists across reloads.
+  const [tab, setTabState] = useState(() => {
+    try {
+      const t = localStorage.getItem('nova_tab')
+      return TABS.includes(t) ? t : 'chat'
+    } catch { return 'chat' }
+  })
+  const setTab = (t) => {
+    setTabState(t)
+    try { localStorage.setItem('nova_tab', t) } catch {}
+  }
   // ── conversation state ──
   const [conversations, setConversations] = useState([])
   const [currentId, setCurrentId] = useState(null)
@@ -93,9 +122,9 @@ export default function App() {
   const [input, setInput] = useState('')
   const [attachedImages, setAttachedImages] = useState([]) // image_url blocks
   const fileInputRef = useRef(null)
-  const onAttachFiles = (e) => {
-    const files = Array.from(e.target.files || []).filter((f) => f.type.startsWith('image/'))
-    if (!files.length) return
+  const addFiles = (fileList) => {
+    const files = Array.from(fileList || []).filter((f) => f.type.startsWith('image/'))
+    if (!files.length) return false
     // NVIDIA NIM's public vision models are provisioned with limit-mm-per-prompt=1,
     // so a multi-image request bounces back as an opaque 400 ("At most 1 image may
     // be provided"). Cap it here instead, with a clear message, when NIM is selected.
@@ -109,7 +138,20 @@ export default function App() {
         setAttachedImages((as) => [...as, { id: `${file.name}-${Date.now()}`, dataUrl: r.result }])
       r.readAsDataURL(file)
     })
+    return true
+  }
+  const onAttachFiles = (e) => {
+    addFiles(e.target.files)
     e.target.value = '' // allow re-selecting the same file
+  }
+  // Screenshots can also be pasted (Ctrl/Cmd+V) or dragged onto the chat.
+  const onPasteInto = (e) => {
+    if (addFiles(e.clipboardData?.files)) e.preventDefault()
+  }
+  const onDropFiles = (e) => {
+    e.preventDefault()
+    setDragOver(false)
+    addFiles(e.dataTransfer?.files)
   }
   const removeImage = (id) => setAttachedImages((as) => as.filter((a) => a.id !== id))
   const [busy, setBusy] = useState(false)
@@ -126,12 +168,21 @@ export default function App() {
   })
   const [health, setHealth] = useState(null)
 
+  // UI state: drag-over highlight, thinking elapsed seconds, scroll-follow,
+  // command palette, textarea auto-grow.
+  const [dragOver, setDragOver] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const [atBottom, setAtBottom] = useState(true)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const textareaRef = useRef(null)
   const scrollRef = useRef(null)
 
   // ── data loading ──
   useEffect(() => { loadModels() }, [])
   useEffect(() => { if (provider === 'ollama') loadOllama() }, [provider])
-  useEffect(() => { scrollToBottom() }, [messages, busy])
+  // Follow new messages only while the user is already at the bottom; when
+  // they've scrolled up to read, the jump-to-latest pill appears instead.
+  useEffect(() => { if (atBottom) scrollToBottom() }, [messages, busy, atBottom])
 
   // Persist Malayalam-mode and Security-mode preferences across reloads.
   useEffect(() => {
@@ -141,10 +192,71 @@ export default function App() {
     try { localStorage.setItem('nova_security_mode', String(securityMode)) } catch {}
   }, [securityMode])
 
+  // Keep the browser tab title in sync with the open conversation.
+  useEffect(() => {
+    const conv = conversations.find((c) => c.id === currentId)
+    document.title = conv?.title ? `${conv.title} · Sallaapam` : 'Sallaapam — Multi-Provider AI Assistant'
+  }, [conversations, currentId])
+
+  // Re-probe backend health every 30s (drives the header status dot — useful
+  // when the phone host or the tunnel drops silently).
+  useEffect(() => {
+    const id = setInterval(() => {
+      api.health().then(setHealth).catch(() => setHealth(null))
+    }, 30000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Elapsed-seconds counter shown in the "thinking" indicator.
+  useEffect(() => {
+    if (!busy) return
+    const t0 = Date.now()
+    setElapsed(0)
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [busy])
+
+  // Grow the textarea with its content (capped, like modern chat UIs).
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+  }, [input])
+
+  // Ctrl/Cmd+K toggles the command palette.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen((o) => !o)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Per-conversation input drafts: switching chats never loses typed text.
+  const draftKey = `nova_draft_${currentId || 'new'}`
+  useEffect(() => {
+    try { setInput(localStorage.getItem(draftKey) || '') } catch {}
+    // draftKey is a pure localStorage lookup — safe to run on key change only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey])
+  const updateInput = (v) => {
+    setInput(v)
+    try { localStorage.setItem(draftKey, v) } catch {}
+  }
+
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
     })
+  }
+
+  const onScrollMessages = (e) => {
+    const el = e.currentTarget
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80)
   }
 
   async function loadModels() {
@@ -270,8 +382,9 @@ export default function App() {
       : text
     const next = [...messages, { role: 'user', content: userContent }]
     setMessages(next)
-    setInput('')
+    updateInput('')
     setAttachedImages([])
+    setAtBottom(true)
     setBusy(true)
     setLastMeta(null)
     // Compose outgoing messages. The backend forwards any `role: system` message
@@ -314,8 +427,36 @@ export default function App() {
   }
 
   const onKeyDownInput = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
+    // isComposing guard: don't send mid-IME-composition (Malayalam
+    // transliteration / CJK input fires Enter to commit candidates).
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
   }
+
+  // ── provider quick-switch (header dropdown + Ctrl+K palette) ──
+  const switchProvider = useCallback((pid) => {
+    if (!providers[pid]) return
+    setProvider(pid)
+    setModel('auto') // let the new provider apply its default model
+  }, [providers])
+
+  // Compact token counter: 27316 -> 27.3k (exact value kept in tooltips).
+  const fmtTok = (n) => (typeof n === 'number'
+    ? (n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : n.toLocaleString())
+    : '—')
+
+  const paletteItems = useMemo(() => {
+    const items = []
+    items.push({ section: 'Actions', hint: 'new', label: 'New chat', run: () => { startNewChat() } })
+    items.push({ section: 'Modes', hint: securityMode ? 'on' : 'off', label: securityMode ? 'Disable NovaSec' : 'Enable NovaSec', run: () => setSecurityMode((s) => !s) })
+    items.push({ section: 'Modes', hint: malayalamMode ? 'on' : 'off', label: malayalamMode ? 'Disable Malayalam mode' : 'Enable Malayalam mode', run: () => setMalayalamMode((m) => !m) })
+    ;[['chat', 'Chat'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].forEach(([id, label]) =>
+      items.push({ section: 'Navigate', hint: 'tab', label: `Go to ${label}`, run: () => setTab(id) }))
+    Object.entries(providers).forEach(([pid, p]) =>
+      items.push({ section: 'Providers', hint: 'switch', label: `Provider: ${p.label}`, run: () => switchProvider(pid) }))
+    conversations.slice(0, 30).forEach((c) =>
+      items.push({ section: 'Conversations', hint: c.provider || '', label: c.title || 'Untitled', run: () => openConversation(c.id) }))
+    return items
+  }, [conversations, providers, securityMode, malayalamMode, startNewChat, openConversation, switchProvider])
 
   // ── provider/model label for header display ──
   // In Malayalam mode the chat is routed through the Gemini provider (multilingual,
@@ -360,6 +501,10 @@ export default function App() {
           onMenu={() => setSidebarOpen(true)}
           providerLabel={providerLabel}
           model={displayModel}
+          providers={providers}
+          activeProvider={activeProvider}
+          onSwitchProvider={switchProvider}
+          health={health}
         />
 
         {/* Tabs */}
@@ -389,8 +534,15 @@ export default function App() {
 
         {tab === 'chat' ? (
           <>
-            {/* Messages */}
-            <div ref={scrollRef} className="flex-1 overflow-y-auto py-5 space-y-3">
+            {/* Messages — wrapper is relative so the jump-to-latest pill and
+                the drag-drop overlay can float above the scroll area */}
+            <div
+              className="relative flex-1 min-h-0"
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }}
+              onDrop={onDropFiles}
+            >
+            <div ref={scrollRef} onScroll={onScrollMessages} className="absolute inset-0 overflow-y-auto py-5 space-y-3">
               {messages.length === 0 && (
                 <div className="h-full flex items-center justify-center text-center px-6">
                   <div className="space-y-6 max-w-md">
@@ -404,7 +556,7 @@ export default function App() {
 
                     {/* Suggested starter prompts */}
                     <div className="flex flex-col gap-2 pt-2">
-                      {QUICK_PROMPTS.map((p) => (
+                      {(malayalamMode ? MALAYALAM_QUICK_PROMPTS : securityMode ? SECURITY_QUICK_PROMPTS : QUICK_PROMPTS).map((p) => (
                         <button
                           key={p}
                           onClick={() => setInput(p)}
@@ -434,7 +586,9 @@ export default function App() {
                     <div className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold bg-accent2 text-black">AI</div>
                     <div className="rounded-2xl px-4 py-3.5 bg-panel2 border border-border">
                       <span className="inline-flex items-end gap-1">
-                        <span className="text-[10px] uppercase text-muted/60 tracking-wider">thinking</span>
+                        <span className="text-[10px] uppercase text-muted/60 tracking-wider">
+                        thinking{elapsed >= 3 ? ` · ${providerLabel.toLowerCase()} · ${elapsed}s` : ''}
+                      </span>
                         <span className="w-1.5 h-1.5 rounded-full bg-accent2 animate-pulse" style={{ animationDelay: '0ms' }} />
                         <span className="w-1.5 h-1.5 rounded-full bg-accent2 animate-pulse" style={{ animationDelay: '200ms' }} />
                         <span className="w-1.5 h-1.5 rounded-full bg-accent2 animate-pulse" style={{ animationDelay: '400ms' }} />
@@ -447,10 +601,54 @@ export default function App() {
               {lastMeta?.reasoning && <div className="mx-3 sm:mx-6"><ReasoningBox reasoning={lastMeta.reasoning} /></div>}
               {lastMeta?.trace?.length > 0 && <div className="mx-3 sm:mx-6"><AgentTrace trace={lastMeta.trace} /></div>}
             </div>
+            {/* jump to latest (shown only when scrolled away from the bottom) */}
+            {!atBottom && messages.length > 0 && (
+              <button
+                onClick={() => { setAtBottom(true); scrollToBottom() }}
+                title="Jump to latest"
+                className="absolute bottom-4 right-4 z-10 p-2 rounded-full bg-panel2 border border-border text-muted hover:text-accent hover:border-accent2 shadow-lg transition-colors"
+              >
+                <ArrowDown className="w-4 h-4" />
+              </button>
+            )}
+            {dragOver && (
+              <div className="absolute inset-3 z-10 pointer-events-none rounded-2xl border-2 border-dashed border-accent/60 bg-accent/5 flex items-center justify-center">
+                <span className="text-[13px] text-accent">Drop images to attach</span>
+              </div>
+            )}
+            </div>
 
             {/* Input */}
             <div className="border-t border-border bg-panel p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-              <div className="mx-auto max-w-[820px]">
+              <div
+                className="mx-auto max-w-[820px]"
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+                onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }}
+                onDrop={onDropFiles}
+              >
+                {/* quick mode toggles — one tap to NovaSec / Malayalam without
+                    digging through Settings */}
+                <div className="flex items-center gap-1.5 mb-2">
+                  <button
+                    onClick={() => setSecurityMode((s) => !s)}
+                    title="Security Mode (NovaSec)"
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] transition-colors ${
+                      securityMode ? 'bg-accent2/15 text-accent2 border-accent2/40' : 'bg-panel2 text-muted border-border hover:text-text'
+                    }`}
+                  >
+                    <Shield className="w-3 h-3" /> NovaSec
+                  </button>
+                  <button
+                    onClick={() => setMalayalamMode((m) => !m)}
+                    title="Malayalam mode (routes via Gemini)"
+                    className={`px-2 py-0.5 rounded-full border text-[10px] transition-colors ${
+                      malayalamMode ? 'bg-accent2/15 text-accent2 border-accent2/40' : 'bg-panel2 text-muted border-border hover:text-text'
+                    }`}
+                  >
+                    അ Malayalam
+                  </button>
+                  {malayalamMode && <span className="text-[10px] text-muted/70">→ gemini</span>}
+                </div>
                 <div className="relative">
                   <input
                     type="file"
@@ -470,12 +668,16 @@ export default function App() {
                     <AttachmentPaperclip className="w-5 h-5" />
                   </button>
                   <textarea
+                    ref={textareaRef}
                     value={input}
-                    onChange={(e) => setInput(e.target.value)}
+                    onChange={(e) => updateInput(e.target.value)}
                     onKeyDown={onKeyDownInput}
+                    onPaste={onPasteInto}
                     rows={1}
                     placeholder="Message Sallaapam…  (Enter to send, Shift+Enter for newline)"
-                    className="w-full resize-none bg-panel text-text border border-border rounded-2xl pl-10 pr-[76px] py-3 text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40"
+                    className={`w-full resize-none bg-panel text-text border rounded-2xl pl-10 pr-[76px] py-3 text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40 ${
+                      dragOver ? 'border-accent/60' : 'border-border'
+                    }`}
                   />
                   <button
                     onClick={send}
@@ -520,7 +722,9 @@ export default function App() {
                     {lastMeta.usage?.total_tokens != null && (
                       <>
                         <span>·</span>
-                        <span>{lastMeta.usage.total_tokens} tok</span>
+                        <span title={`${lastMeta.usage.total_tokens.toLocaleString()} tokens`}>
+                          {fmtTok(lastMeta.usage.total_tokens)} tok
+                        </span>
                       </>
                     )}
                   </div>
@@ -542,6 +746,9 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* Command palette (Ctrl/Cmd+K) */}
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={paletteItems} />
 
       {/* Settings Modal */}
       <SettingsModal

@@ -3,26 +3,29 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0ea5e2">
+  <meta name="theme-color" content="#0b0a09">
+  <meta name="color-scheme" content="dark">
   <title>NOVA • mobile</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/logo.png" sizes="any">
   <style>
-    :root{--ok:#16a34a;--bad:#94a3b8;--bg:#0f172a;--card:#1e293b;--tx:#f1f5f7;--muted:#94a3b8;--accent:#0ea5e2}
+    /* Warm "night at the SOC" palette — matches the main app. */
+    :root{--ok:#3fd07a;--bad:#827d70;--bg:#0b0a09;--card:#12100e;--tx:#d6d0c2;--muted:#827d70;--accent:#c9a227;--border:#24221d}
+    @font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/plex-mono-400.woff2') format('woff2')}
     *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--tx);font-family:-apple-system,BlinkMacSystemDashboard,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-    header{display:flex;align-items:center;gap:.6rem;padding:14px 18px;border-bottom:1px solid #334155}
+    body{margin:0;background:var(--bg);color:var(--tx);font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    header{display:flex;align-items:center;gap:.6rem;padding:14px 18px;border-bottom:1px solid var(--border)}
     header h1{font-size:17px;margin:0;font-weight:600}
     #status{width:10px;height:10px;border-radius:50%;background:var(--bad);display:inline-block;margin-left:9px;vertical-align:middle}
     #status.up{background:var(--ok)}
     main{padding:16px}
-    .card{background:var(--card);border:1px solid #334155;border-radius:12px;padding:14px 16px;margin-bottom:12px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:12px}
     .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px}
     .dot{width:12px;height:12px;border-radius:50%;display:inline-block;margin-right:8px;vertical-align:middle}
     .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
     .pname{font-size:13px}
     .summary{color:var(--muted);font-size:13px;margin-top:6px}
-    footer{padding:12px 16px 26px;color:#64748b;font-size:12px;text-align:center}
+    footer{padding:12px 16px 26px;color:var(--muted);font-size:12px;text-align:center}
     a{color:var(--accent)}
   </style>
 </head>

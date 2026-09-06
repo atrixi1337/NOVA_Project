@@ -15,5 +15,11 @@ export function renderMarkdown(src) {
   tmp.querySelectorAll('pre code').forEach((block) => {
     try { hljs.highlightElement(block) } catch {}
   })
+  // Links open in a new tab — a same-origin navigation would leave the chat
+  // SPA entirely and lose the open conversation.
+  tmp.querySelectorAll('a[href]').forEach((a) => {
+    a.target = '_blank'
+    a.rel = 'noopener noreferrer'
+  })
   return tmp.innerHTML
 }

@@ -3,13 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b0a09" />
+  <meta name="color-scheme" content="dark" />
   <title>Sallaapam — Token Usage</title>
   <link rel="icon" href="./logo.png" />
   <style>
+    /* Self-hosted mono (same files the SPA uses). */
+    @font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 400;
+      font-display: swap; src: url('/fonts/plex-mono-400.woff2') format('woff2'); }
+    @font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 600;
+      font-display: swap; src: url('/fonts/plex-mono-600.woff2') format('woff2'); }
+    /* Warm "night at the SOC" palette — matches the main app. */
     :root {
-      --bg: #0d1116; --panel: #151a22; --panel2: #1d232b; --border: #30363d;
-      --text: #e6edf3; --muted: #9da9b5; --accent: #58a6ff; --accent2: #7ee787;
-      --warn: #ffd86b;
+      --bg: #0b0a09; --panel: #12100e; --panel2: #1a1915; --border: #24221d;
+      --text: #d6d0c2; --muted: #827d70; --accent: #c9a227; --accent2: #8a7320;
+      --warn: #d08770;
     }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: "IBM Plex Mono", ui-monospace, monospace;

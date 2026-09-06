@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { ChevronLeft, ChevronRight } from './Icons.jsx'
+import { ChevronLeft, ChevronRight, Search } from './Icons.jsx'
 
 function formatTime(ts) {
   if (!ts) return ''
@@ -15,13 +15,34 @@ function formatTime(ts) {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
+// Bucket label for date grouping (Today / Yesterday / This week / Earlier).
+function dateGroup(ts) {
+  if (!ts) return 'Earlier'
+  const now = new Date()
+  const startToday = new Date(now); startToday.setHours(0, 0, 0, 0)
+  const t = ts * 1000
+  if (t >= startToday.getTime()) return 'Today'
+  if (t >= startToday.getTime() - 86400000) return 'Yesterday'
+  if (t >= startToday.getTime() - 7 * 86400000) return 'This week'
+  return 'Earlier'
+}
+
 function truncate(text, n) {
   if (!text) return ''
   const t = text.replace(/\n+/g, ' ').trim()
   return t.length > n ? t.slice(0, n) + '…' : t
 }
 
-// Conversation list sidebar with new-chat, rename, delete, settings, and a
+// Deterministic warm hue per provider id, for the per-conversation dot.
+function providerHue(provider) {
+  const s = provider || ''
+  let h = 7
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360
+  return h
+}
+
+// Conversation list sidebar with new-chat, search filter, date-grouped
+// rename/delete (with two-tap delete confirm), provider dots, settings, and a
 // collapse-to-icon-rail toggle (desktop). On mobile (< md) it stays a full
 // off-canvas drawer controlled by the `open` prop + backdrop.
 export default function Sidebar({
@@ -41,6 +62,9 @@ export default function Sidebar({
   const [hovered, setHovered] = useState(null)
   const [renaming, setRenaming] = useState(null)
   const [draft, setDraft] = useState('')
+  const [filter, setFilter] = useState('')
+  const [confirmDel, setConfirmDel] = useState(null)
+  const confirmTimer = useRef(null)
   const inputRef = useRef(null)
 
   useEffect(() => {
@@ -49,6 +73,8 @@ export default function Sidebar({
       inputRef.current?.select()
     }
   }, [renaming])
+
+  useEffect(() => () => clearTimeout(confirmTimer.current), [])
 
   const startRename = (cid, title) => {
     setRenaming(cid)
@@ -63,10 +89,64 @@ export default function Sidebar({
     }
   }
 
+  // Two-tap delete: first tap arms ("sure?"), second tap within 3s deletes.
+  const handleDelete = (cid) => {
+    if (confirmDel === cid) {
+      clearTimeout(confirmTimer.current)
+      setConfirmDel(null)
+      onDelete(cid)
+      return
+    }
+    setConfirmDel(cid)
+    clearTimeout(confirmTimer.current)
+    confirmTimer.current = setTimeout(() => setConfirmDel((cur) => (cur === cid ? null : cur)), 3000)
+  }
+
   const sorted = [...conversations].sort((a, b) => b.updated_at - a.updated_at)
+
+  const q = filter.trim().toLowerCase()
+  const visible = q
+    ? sorted.filter((c) =>
+        (c.title || '').toLowerCase().includes(q) ||
+        (c.preview || '').toLowerCase().includes(q) ||
+        (c.provider || '').toLowerCase().includes(q))
+    : sorted
+
+  // Group the filtered list by recency bucket (order preserved within group).
+  const groups = []
+  const byLabel = {}
+  for (const c of visible) {
+    const label = dateGroup(c.updated_at)
+    if (!byLabel[label]) {
+      byLabel[label] = []
+      groups.push([label, byLabel[label]])
+    }
+    byLabel[label].push(c)
+  }
 
   // Collapsed = desktop icon rail: labels hidden, conversation list becomes dots.
   const isRail = !!collapsed
+
+  const deleteButton = (c) => (
+    <button
+      onClick={(e) => { e.stopPropagation(); handleDelete(c.id) }}
+      className={`p-1 rounded-md transition-colors ${
+        confirmDel === c.id
+          ? 'text-[#1a1000] bg-err font-semibold'
+          : 'text-muted hover:text-err hover:bg-panel'
+      }`}
+      title={confirmDel === c.id ? 'Tap again to delete' : 'Delete (tap twice)'}
+    >
+      {confirmDel === c.id ? (
+        <span className="text-[9px] px-0.5 whitespace-nowrap">sure?</span>
+      ) : (
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M19 7l-.867 12.133A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.867L5 7m5 5v5m4-5v5M4 7h16M4 7l1-3h14l1 3M4 7l1-3h14l1 3M9 11l3 3 3-3" />
+        </svg>
+      )}
+    </button>
+  )
 
   return (
     <aside
@@ -105,6 +185,19 @@ export default function Sidebar({
           </svg>
           <span className={isRail ? 'md:hidden' : ''}>New chat</span>
         </button>
+
+        {/* search filter (expanded sidebar only) */}
+        {!isRail && (
+          <div className="relative mt-2">
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Search chats…"
+              className="w-full bg-panel2 text-text text-[12px] pl-8 pr-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2 placeholder:text-muted/60"
+            />
+          </div>
+        )}
       </div>
 
       {/* conversation list */}
@@ -127,7 +220,7 @@ export default function Sidebar({
           </div>
         ) : isRail ? (
           <ul className="space-y-1.5 px-2">
-            {sorted.map((c) => {
+            {visible.map((c) => {
               const active = c.id === currentId
               return (
                 <li key={c.id}>
@@ -146,83 +239,90 @@ export default function Sidebar({
               )
             })}
           </ul>
+        ) : visible.length === 0 ? (
+          <div className="px-4 py-6 text-center text-[12px] text-muted">No chats match “{filter}”.</div>
         ) : (
-          <ul className="space-y-1 px-2">
-            {sorted.map((c) => {
-              const active = c.id === currentId
-              const isRenaming = renaming === c.id
-              return (
-                <li
-                  key={c.id}
-                  className={`group relative rounded-xl mx-1 ${
-                    active ? 'bg-panel2' : 'hover:bg-panel2/50'
-                  } transition-colors`}
-                  onMouseEnter={() => setHovered(c.id)}
-                  onMouseLeave={() => setHovered(null)}
-                >
-                  <button
-                    onClick={() => { if (!isRenaming) { onSelect(c.id); onClose?.() } }}
-                    className="w-full text-left p-3 rounded-xl focus:outline-none"
-                  >
-                    {isRenaming ? (
-                      <input
-                        ref={inputRef}
-                        className="w-full bg-panel2 text-text text-[13px] px-2 py-1 rounded-lg border border-border outline-none focus:border-accent2"
-                        value={draft}
-                        onChange={(e) => setDraft(e.target.value)}
-                        onBlur={() => confirmRename(c.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') confirmRename(c.id)
-                          if (e.key === 'Escape') { setRenaming(null); setDraft(c.title) }
-                        }}
-                      />
-                    ) : (
-                      <>
-                        <div className="font-medium text-[13px] text-text truncate mb-0.5">
-                          {c.title}
-                        </div>
-                        {c.preview ? (
-                          <div className="text-[12px] text-muted truncate mb-1">
-                            {truncate(c.preview, 48)}
-                          </div>
-                        ) : null}
-                        <div className="flex items-center justify-between text-[11px] text-muted/60">
-                          <span>{formatTime(c.updated_at)}</span>
-                          {c.msg_count != null && <span>• {c.msg_count} msgs</span>}
-                        </div>
-                      </>
-                    )}
-                  </button>
+          groups.map(([label, items]) => (
+            <div key={label} className="mb-2">
+              <div className="px-3 pt-1.5 pb-1 text-[10px] uppercase tracking-wider text-muted/70 small-caps">
+                {label}
+              </div>
+              <ul className="space-y-1 px-2">
+                {items.map((c) => {
+                  const active = c.id === currentId
+                  const isRenaming = renaming === c.id
+                  return (
+                    <li
+                      key={c.id}
+                      className={`group relative rounded-xl mx-1 ${
+                        active ? 'bg-panel2' : 'hover:bg-panel2/50'
+                      } transition-colors`}
+                      onMouseEnter={() => setHovered(c.id)}
+                      onMouseLeave={() => setHovered(null)}
+                    >
+                      <button
+                        onClick={() => { if (!isRenaming) { onSelect(c.id); onClose?.() } }}
+                        className="w-full text-left p-3 rounded-xl focus:outline-none"
+                      >
+                        {isRenaming ? (
+                          <input
+                            ref={inputRef}
+                            className="w-full bg-panel2 text-text text-[13px] px-2 py-1 rounded-lg border border-border outline-none focus:border-accent2"
+                            value={draft}
+                            onChange={(e) => setDraft(e.target.value)}
+                            onBlur={() => confirmRename(c.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') confirmRename(c.id)
+                              if (e.key === 'Escape') { setRenaming(null); setDraft(c.title) }
+                            }}
+                          />
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span
+                                className="shrink-0 w-1.5 h-1.5 rounded-full"
+                                style={{ background: `hsl(${providerHue(c.provider)} 45% 55%)` }}
+                                title={c.provider || 'unknown provider'}
+                              />
+                              <span className="font-medium text-[13px] text-text truncate">
+                                {c.title}
+                              </span>
+                            </div>
+                            {c.preview ? (
+                              <div className="text-[12px] text-muted truncate mt-0.5 mb-1 pl-3">
+                                {truncate(c.preview, 48)}
+                              </div>
+                            ) : null}
+                            <div className="flex items-center justify-between text-[11px] text-muted/70 pl-3">
+                              <span>{formatTime(c.updated_at)}</span>
+                              {c.msg_count != null && <span>• {c.msg_count} msgs</span>}
+                            </div>
+                          </>
+                        )}
+                      </button>
 
-                  {/* hover actions (only for non-active, non-renaming) */}
-                  {!isRenaming && (
-                    <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => startRename(c.id, c.title)}
-                        className="p-1 rounded-md text-muted hover:text-text hover:bg-panel transition-colors"
-                        title="Rename"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-5-9l-7 7v3h3l7-7m-3-1l3-3m0 0l2.5-2.5M17 2l5 5-3 3-5-5 3-3z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={() => onDelete(c.id)}
-                        className="p-1 rounded-md text-muted hover:text-err hover:bg-panel transition-colors"
-                        title="Delete"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                            d="M19 7l-.867 12.133A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.867L5 7m5 5v5m4-5v5M4 7h16M4 7l1-3h14l1 3M4 7l1-3h14l1 3M9 11l3 3 3-3" />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
+                      {/* hover actions (only for non-active, non-renaming) */}
+                      {!isRenaming && (
+                        <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity bg-panel2/80 rounded-lg">
+                          <button
+                            onClick={() => startRename(c.id, c.title)}
+                            className="p-1 rounded-md text-muted hover:text-text hover:bg-panel transition-colors"
+                            title="Rename"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-5-9l-7 7v3h3l7-7m-3-1l3-3m0 0l2.5-2.5M17 2l5 5-3 3-5-5 3-3z" />
+                            </svg>
+                          </button>
+                          {deleteButton(c)}
+                        </div>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          ))
         )}
       </nav>
 
