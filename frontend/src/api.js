@@ -67,7 +67,55 @@ export const api = {
   ollamaUnload: () => jpost('/api/ollama/unload', {}),
 
   // chat
-  chat: (payload) => jpost('/api/chat', payload),
+  chat: (payload, signal) => jpost('/api/chat', payload, signal ? { extra: { signal } } : {}),
+
+  // Streaming chat (SSE from POST /api/chat/stream). handlers: {onDelta, onReasoning,
+  // onDone, onError, onAbort}. Pass an AbortSignal to support a Stop button.
+  // Returns nothing; all outcomes arrive through handlers.
+  chatStream: async (payload, handlers = {}, signal) => {
+    try {
+      const r = await fetch(BASE + '/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        body: JSON.stringify(payload),
+        signal,
+      })
+      if (!r.ok || !r.body) {
+        let detail = `POST /api/chat/stream -> ${r.status}`
+        try { const d = await r.json(); detail = d.detail || detail } catch {}
+        throw new Error(detail)
+      }
+      const reader = r.body.getReader()
+      const dec = new TextDecoder()
+      let buf = ''
+      const dispatch = (raw) => {
+        for (const line of raw.split('\n')) {
+          if (!line.startsWith('data:')) continue
+          let ev
+          try { ev = JSON.parse(line.slice(5)) } catch { continue }
+          if (ev.type === 'delta') handlers.onDelta?.(ev.content)
+          else if (ev.type === 'reasoning') handlers.onReasoning?.(ev.content)
+          else if (ev.type === 'done') handlers.onDone?.(ev)
+          else if (ev.type === 'error') handlers.onError?.(ev.detail || 'stream error')
+        }
+      }
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+        let idx
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          dispatch(buf.slice(0, idx))
+          buf = buf.slice(idx + 2)
+        }
+      }
+      if (buf.trim()) dispatch(buf)
+      handlers.onEnd?.()
+    } catch (e) {
+      if (e?.name === 'AbortError') handlers.onAbort?.()
+      else handlers.onError?.(e?.message || String(e))
+    }
+  },
 
   // image generation (DALL·E via Azure Foundry)
   images: (payload) => jpost('/api/images', payload),

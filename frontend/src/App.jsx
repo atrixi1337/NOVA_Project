@@ -10,33 +10,12 @@ import Analyzer from './components/Analyzer.jsx'
 import UsageDashboard from './components/UsageDashboard.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
+import Arena from './components/Arena.jsx'
+import { composePersonaMessages } from './personas.js'
 import { Sparkle, AttachmentPaperclip, Remove, SendSolid, Shield, ArrowDown } from './components/Icons.jsx'
 
-// Malayalam mode: route chats through the Gemini provider (multilingual, strong
-// Malayalam) and prepend a system instruction so the model replies only in
-// Malayalam — either Malayalam script (e.g. "സുഖമാണോ") or Manglish / Latin-script
-// Malayalam (e.g. "sugamano"). The backend forwards system messages verbatim.
-//
-// Tone is deliberately a "grumpy old Malayali uncle": terse, blunt, dry-witted,
-// world-weary, quietly competent underneath the sigh — NOT a cringy teen.
-// Google's safety policy still applies in EVERY language (incl. Malayalam), so
-// profanity / slurs / sexual / hate / harassment is refused regardless of
-// language. "Grumpy uncle" = attitude, not abuse; that line is not crossed.
-const MALAYALAM_SYSTEM_PROMPT =
-  'You are Sallaapam, a grumpy old Malayali uncle — world-weary, blunt, dry-witted, the ' +
-  'sort who has seen it all, answers with a sigh, and rolls his eyes at modern ' +
-  'nonsense. The user turned on Malayalam mode, so reply ONLY in Malayalam — Malayalam ' +
-  'script (e.g. "സുഖമാണോ") or Manglish (e.g. "sugamano"), matching the script the ' +
-  'user wrote with. Channel that uncle voice: terse, no-nonsense sentences, a ' +
-  'little blunt, a touch sarcastic, a long-suffering sigh at the user\'s sillier ' +
-  'questions ("Aa karyam nokki thirichu nokkam... ennittum ithuvare oru 30 varsham "' +
-  'aayi ittu; mumbu njan ..."), with dry back-in-my-day knowing and mild ' +
-  'good-natured ribbing — never mean-spirited, never angry, never profanity, never ' +
-  'slurs, never sexual or hateful. You stay quietly competent: you fix the thing ' +
-  'without fuss, just through gritted teeth. Skip emoji, teenage slang, and ' +
-  '"omg super sugam" — speak like an uncle who\'s read too much and explains too ' +
-  'little. Never answer in English prose. You run inside a local proof-of-concept ' +
-  'chatbot on the user\'s lab machine.'
+// Persona system prompts (Malayalam "grumpy uncle" / NovaSec) live in
+// personas.js — shared between the chat and the Arena tab.
 
 // Suggested starter prompts shown in the empty state — pick up the input so the
 // user can review/tweak before sending (matches the "grumpy uncle" security persona).
@@ -63,32 +42,9 @@ const SECURITY_QUICK_PROMPTS = [
 ]
 
 // Tab ids (order matters for the tab bar).
-const TABS = ['chat', 'analyzer', 'usage']
+const TABS = ['chat', 'arena', 'analyzer', 'usage']
 
-// Security Mode (NovaSec): swap the model instructions into a cybersecurity-expert
-// persona via a per-request system message. The backend forwards `role: system`
-// verbatim and skips its own default prompt when one is present, so this persona
-// is applied to whichever provider is selected. Cloud providers still apply their
-// own safety filters — for fully unrestricted content use Local Ollama on a host
-// with enough VRAM (not feasible on this phone). Scope is bounded to authorized
-// security research only.
-const SECURITY_MODE_SYSTEM_PROMPT =
-  'You are NovaSec, a cybersecurity-expert assistant in the Sallaapam lab chatbot. ' +
-  'Help with threat modeling, vulnerability analysis & triage, penetration-testing ' +
-  'methodology and reporting (for systems you own or are explicitly permitted to ' +
-  'test), secure-code review, CTF challenges, defensive security, incident response, ' +
-  'log/SIEM analysis, secure architecture, CVE explanation, and security-tool ' +
-  'prototyping for authorized lab networks. Reply concisely: short markdown, ' +
-  'copy-friendly code blocks, structured findings (severity/evidence/mitigation). ' +
-  'BOUNDARIES: do NOT plan or execute unauthorized intrusions; do NOT generate ' +
-  'malware, ransomware, or active-delivery attack payloads for unauthorized ' +
-  'targets; do NOT assist phishing or social-engineering against uninvolved parties; ' +
-  'do NOT bypass authentication/access controls on systems you do not own or lack ' +
-  'written permission for. If a request is near that line, first confirm the ' +
-  'target is in-scope/authorized, then answer with theory/methodology/explanation ' +
-  'rather than ready-to-run hostile tooling. Treat all output as educational/' +
-  'research material for authorized use. Note: cloud providers here still enforce ' +
-  'their own safety filters, so some restricted content may be refused regardless.'
+// NovaSec persona prompt also lives in personas.js.
 
 export default function App() {
   // Last active tab persists across reloads.
@@ -114,6 +70,14 @@ export default function App() {
   const [model, setModel] = useState('auto')
   const [agent, setAgent] = useState(false)
   const [reasoningEffort, setReasoning] = useState('')
+  // Agent tool preset: core | research | security. NovaSec overrides to
+  // 'security' at send time (persona-aware tools).
+  const [toolsPreset, setToolsPreset] = useState(() => {
+    try {
+      const t = localStorage.getItem('nova_tools_preset')
+      return ['core', 'research', 'security'].includes(t) ? t : 'research'
+    } catch { return 'research' }
+  })
   const [ollama, setOllama] = useState({ loaded: false, model: '' })
   const [ollamaBusy, setOllamaBusy] = useState(false)
 
@@ -176,6 +140,7 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const textareaRef = useRef(null)
   const scrollRef = useRef(null)
+  const abortRef = useRef(null) // active chat request (stream or agent call)
 
   // ── data loading ──
   useEffect(() => { loadModels() }, [])
@@ -191,6 +156,9 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('nova_security_mode', String(securityMode)) } catch {}
   }, [securityMode])
+  useEffect(() => {
+    try { localStorage.setItem('nova_tools_preset', String(toolsPreset)) } catch {}
+  }, [toolsPreset])
 
   // Keep the browser tab title in sync with the open conversation.
   useEffect(() => {
@@ -387,43 +355,96 @@ export default function App() {
     setAtBottom(true)
     setBusy(true)
     setLastMeta(null)
-    // Compose outgoing messages. The backend forwards any `role: system` message
-    // verbatim and skips its own default prompt when one is present, so each mode
-    // swaps in its persona as a per-request system instruction. Malayalam mode
-    // takes precedence (it also routes to the Gemini provider).
-    const sendMessages = []
-    if (malayalamMode) {
-      sendMessages.push({ role: 'system', content: MALAYALAM_SYSTEM_PROMPT })
-    } else if (securityMode) {
-      sendMessages.push({ role: 'system', content: SECURITY_MODE_SYSTEM_PROMPT })
+    // Personas compose as a per-request system message (Malayalam takes
+    // precedence and routes to Gemini); the backend forwards them verbatim.
+    const sendMessages = composePersonaMessages(next, { malayalamMode, securityMode })
+    const payload = {
+      messages: sendMessages,
+      model: activeModel,
+      agent,
+      provider: activeProvider,
+      reasoning_effort: reasoningEffort || undefined,
+      conversation_id: cid,
+      api_key: getUIKey(activeProvider) || undefined,
+      // Persona-aware agent tools (NovaSec → recon set with the HTTP header probe).
+      tools_preset: agent ? (securityMode ? 'security' : toolsPreset) : undefined,
     }
-    sendMessages.push(...next)
-    try {
-      const data = await api.chat({
-        messages: sendMessages,
-        model: activeModel,
-        agent,
-        provider: activeProvider,
-        reasoning_effort: reasoningEffort || undefined,
-        conversation_id: cid,
-        api_key: getUIKey(activeProvider) || undefined,
-      })
-      setMessages([...next, { role: 'assistant', content: data.content, reasoning: data.reasoning }])
+    const assistantIdx = next.length
+    const finalizeMeta = (ev) => {
       setLastMeta({
-        model: data.model,
-        provider: data.provider,
-        reasoning: data.reasoning,
-        trace: data.trace,
-        usage: data.usage,
+        model: ev.model,
+        provider: ev.provider,
+        reasoning: ev.reasoning,
+        trace: ev.trace || [],
+        usage: ev.usage,
       })
       setConversations((cs) => cs.map((c) =>
-        c.id === cid ? { ...c, preview: data.content || '', title: data.title || c.title } : c
+        c.id === cid ? { ...c, preview: ev.content || '', title: ev.title || c.title } : c
       ))
+    }
+
+    if (!agent) {
+      // Streaming path: token-by-token into a live assistant bubble.
+      // The Stop button aborts the fetch, which cancels the server-side
+      // generator before persistence — partial turns are not saved.
+      let acc = ''
+      const ctl = new AbortController()
+      abortRef.current = ctl
+      setMessages([...next, { role: 'assistant', content: '' }])
+      await api.chatStream(
+        payload,
+        {
+          onDelta: (c) => {
+            acc += c
+            setMessages((prev) => {
+              const cp = [...prev]
+              cp[assistantIdx] = { role: 'assistant', content: acc }
+              return cp
+            })
+          },
+          onDone: (ev) => {
+            setMessages([...next, { role: 'assistant', content: ev.content ?? acc, reasoning: ev.reasoning }])
+            finalizeMeta(ev)
+            setBusy(false)
+            abortRef.current = null
+          },
+          onError: (msg) => {
+            setErr(msg)
+            setMessages(acc ? [...next, { role: 'assistant', content: acc }] : next)
+            setBusy(false)
+            abortRef.current = null
+          },
+          onAbort: () => {
+            setMessages([...next, { role: 'assistant', content: acc + ' …[stopped]' }])
+            setBusy(false)
+            abortRef.current = null
+          },
+        },
+        ctl.signal
+      )
+      return
+    }
+
+    // Agent mode keeps the non-streaming multi-round tool endpoint (also
+    // abortable now via the same Stop button).
+    try {
+      const ctl = new AbortController()
+      abortRef.current = ctl
+      const data = await api.chat(payload, ctl.signal)
+      setMessages([...next, { role: 'assistant', content: data.content, reasoning: data.reasoning }])
+      finalizeMeta(data)
+      setLastMeta((m) => ({ ...m, trace: data.trace || [] }))
     } catch (e) {
-      setErr(e.message)
+      if (e?.name === 'AbortError') setMessages(next)
+      else setErr(e.message)
     } finally {
       setBusy(false)
+      abortRef.current = null
     }
+  }
+
+  const stopGenerating = () => {
+    abortRef.current?.abort()
   }
 
   const onKeyDownInput = (e) => {
@@ -449,7 +470,7 @@ export default function App() {
     items.push({ section: 'Actions', hint: 'new', label: 'New chat', run: () => { startNewChat() } })
     items.push({ section: 'Modes', hint: securityMode ? 'on' : 'off', label: securityMode ? 'Disable NovaSec' : 'Enable NovaSec', run: () => setSecurityMode((s) => !s) })
     items.push({ section: 'Modes', hint: malayalamMode ? 'on' : 'off', label: malayalamMode ? 'Disable Malayalam mode' : 'Enable Malayalam mode', run: () => setMalayalamMode((m) => !m) })
-    ;[['chat', 'Chat'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].forEach(([id, label]) =>
+    ;[['chat', 'Chat'], ['arena', 'Arena'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].forEach(([id, label]) =>
       items.push({ section: 'Navigate', hint: 'tab', label: `Go to ${label}`, run: () => setTab(id) }))
     Object.entries(providers).forEach(([pid, p]) =>
       items.push({ section: 'Providers', hint: 'switch', label: `Provider: ${p.label}`, run: () => switchProvider(pid) }))
@@ -509,7 +530,7 @@ export default function App() {
 
         {/* Tabs */}
         <div className="flex gap-1 px-4 pt-2 border-b border-border bg-panel">
-          {[['chat', 'Chat'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].map(([id, label]) => (
+          {[['chat', 'Chat'], ['arena', 'Arena'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].map(([id, label]) => (
             <button
               key={id}
               onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
@@ -578,9 +599,11 @@ export default function App() {
                   </div>
                 </div>
               )}
-              {messages.map((m, i) => <Message key={i} msg={m} />)}
+              {messages.map((m, i) => (
+                <Message key={i} msg={m} streaming={busy && i === messages.length - 1 && m.role === 'assistant'} />
+              ))}
 
-              {busy && (
+              {busy && messages[messages.length - 1]?.role !== 'assistant' && (
                 <div className="flex justify-start px-3 sm:px-6">
                   <div className="max-w-[820px] w-full flex gap-3">
                     <div className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold bg-accent2 text-black">AI</div>
@@ -679,26 +702,25 @@ export default function App() {
                       dragOver ? 'border-accent/60' : 'border-border'
                     }`}
                   />
-                  <button
-                    onClick={send}
-                    disabled={busy || (!input.trim() && attachedImages.length === 0)}
-                    className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-accent text-[#1a1000] font-semibold text-[13px] disabled:opacity-40 hover:brightness-90 transition-all flex items-center justify-center gap-1.5"
-                  >
-                    {busy ? (
-                      <>
-                        <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-                          <path className="opacity-75" fill="currentColor" d="M2 12a10 10 0 0114.83-8.83A1 1 0 0118 4v10a1 1 0 01-1 1H5a1 1 0 01-.83-1.55A10 10 0 002 12z" />
-                        </svg>
-                        <span>…</span>
-                      </>
-                    ) : (
-                      <>
-                        <SendSolid className="w-4 h-4" />
-                        <span>Send</span>
-                      </>
-                    )}
-                  </button>
+                  {busy ? (
+                    <button
+                      onClick={stopGenerating}
+                      title="Stop generating"
+                      className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-err text-white font-semibold text-[13px] hover:brightness-110 transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <span className="text-[10px] leading-none">■</span>
+                      <span>Stop</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={send}
+                      disabled={!input.trim() && attachedImages.length === 0}
+                      className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-accent text-[#1a1000] font-semibold text-[13px] disabled:opacity-40 hover:brightness-90 transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <SendSolid className="w-4 h-4" />
+                      <span>Send</span>
+                    </button>
+                  )}
                 </div>
                 {attachedImages.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-2">
@@ -738,6 +760,13 @@ export default function App() {
               </div>
             </div>
           </>
+        ) : tab === 'arena' ? (
+          <Arena
+            providers={providers}
+            health={health}
+            malayalamMode={malayalamMode}
+            securityMode={securityMode}
+          />
         ) : tab === 'usage' ? (
           <UsageDashboard />
         ) : (
@@ -764,6 +793,8 @@ export default function App() {
         setAgent={setAgent}
         reasoningEffort={reasoningEffort}
         setReasoning={setReasoning}
+        toolsPreset={toolsPreset}
+        setToolsPreset={setToolsPreset}
         ollama={ollama}
         ollamaBusy={ollamaBusy}
         ollamaLoad={ollamaLoad}

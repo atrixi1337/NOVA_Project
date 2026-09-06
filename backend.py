@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import io
+import base64
 import sqlite3
 import uuid
 import xml.etree.ElementTree as ET
@@ -25,7 +26,7 @@ logger = logging.getLogger("nova_poc")
 import httpx
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import re
@@ -76,7 +77,12 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_API_KEY_BACKUP = os.getenv("GEMINI_API_KEY_BACKUP", "")
 # Ordered candidate keys for Gemini (primary first, backup after). Used by
 # call_llm to transparently fail over to the backup on a 429 from the primary.
-GEMINI_API_KEYS = [k for k in (GEMINI_API_KEY, GEMINI_API_KEY_BACKUP) if k]
+# Obvious placeholder values ("your-...") are dropped so a template .env can't
+# poison the failover chain with an invalid key.
+GEMINI_API_KEYS = [
+    k for k in (GEMINI_API_KEY, GEMINI_API_KEY_BACKUP)
+    if k and not k.lower().startswith("your-")
+]
 GEMINI_DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 # Models offered for the Gemini provider in the UI picker (current/valid IDs).
 GEMINI_MODELS = [
@@ -332,6 +338,9 @@ CLOUDFLARE_MODELS = [
         "@cf/qwen/qwen3.8-27b,@cf/meta/llama-3.1-8b-instruct,@cf/meta/llama-3.2-3b-instruct",
     ).split(",") if m.strip()
 ]
+# Text-to-image model on Workers AI (used by /api/images with provider=cloudflare).
+# flux-1-schnell is fast and cheap on the free 10k-neurons/day tier.
+CLOUDFLARE_IMAGE_MODEL = os.getenv("CLOUDFLARE_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell")
 
 # ---- provider: HuggingFace Inference Providers router (OpenAI-compatible) ----
 # Routes to 15+ partners; free catalog is limited + censored. Uses your HF token.
@@ -530,6 +539,65 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the public web (DuckDuckGo, no API key) and return the top results as 'title — URL — snippet' lines. Use for current events, CVEs, documentation lookups, or anything past your training cutoff.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query.",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "How many results to return (1-8, default 5).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Fetch a public http(s) page and return its readable text (HTML stripped, truncated). Use after web_search to read a specific result, or when the user gives you a URL.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The http(s) URL to fetch.",
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum characters of extracted text to return (default 4000).",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "http_headers",
+            "description": "Passive recon: request a public http(s) URL and return its status code and response headers (server, security headers, cookies, etc). Read-only — sends one HEAD/GET request. Use for security-posture checks like missing HSTS/CSP.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The http(s) URL to probe.",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
 ]
 
 # ----------------------------------------------------------------------------
@@ -611,11 +679,130 @@ def tool_read_file(filename: str, lines: int = 50) -> str:
     return "\n".join(head)
 
 
+# ----------------------------------------------------------------------------
+# Web tools (no API keys — DuckDuckGo HTML + plain httpx fetches)
+# ----------------------------------------------------------------------------
+_WEB_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0 Safari/537.36 SallaapamPOC/1.0"
+)
+
+
+def _strip_html(raw: str) -> str:
+    import html as _html
+    txt = re.sub(r"(?is)<(script|style|noscript|svg|head)[^>]*>.*?</\1>", " ", raw)
+    txt = re.sub(r"(?s)<[^>]+>", " ", txt)
+    txt = _html.unescape(txt)
+    return re.sub(r"\s+", " ", txt).strip()
+
+
+def _ddg_decode_url(href: str) -> str:
+    """DuckDuckGo wraps result links in /l/?uddg=<encoded> — unwrap when present."""
+    if "uddg=" in href:
+        from urllib.parse import urlparse, parse_qs, unquote
+        try:
+            v = parse_qs(urlparse(href).query).get("uddg", [None])[0]
+            if v:
+                return unquote(v)
+        except Exception:  # noqa: BLE001
+            pass
+    return href
+
+
+def tool_web_search(query: str, max_results: int = 5) -> str:
+    max_results = max(1, min(max_results, 8))
+    try:
+        r = httpx.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": query},
+            headers={"User-Agent": _WEB_UA, "Referer": "https://duckduckgo.com/"},
+            timeout=15.0,
+            follow_redirects=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        return f"Web search failed: {e}"
+    if r.status_code != 200:
+        return f"Web search unavailable (HTTP {r.status_code} from DuckDuckGo). Try again later."
+    html_ = r.text
+    links = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html_, re.S)
+    if not links:
+        links = re.findall(r'<a[^>]+href="([^"]+)"[^>]*class="result__a"[^>]*>(.*?)</a>', html_, re.S)
+    snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html_, re.S)
+    if not links:
+        return "No results found (or DuckDuckGo changed its markup / flagged the query)."
+    out: List[str] = []
+    for i, (href, title) in enumerate(links[:max_results]):
+        title_txt = _strip_html(title)
+        url = _ddg_decode_url(href)
+        snip = _strip_html(snippets[i]) if i < len(snippets) else ""
+        out.append(f"{i + 1}. {title_txt}\n   {url}" + (f"\n   {snip[:280]}" if snip else ""))
+    return "\n".join(out)
+
+
+def tool_web_fetch(url: str, max_chars: int = 4000) -> str:
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return "Only http(s) URLs are supported."
+    max_chars = max(200, min(max_chars, 20000))
+    try:
+        r = httpx.get(url, headers={"User-Agent": _WEB_UA}, timeout=15.0, follow_redirects=True)
+    except Exception as e:  # noqa: BLE001
+        return f"Fetch failed: {e}"
+    if r.status_code >= 400:
+        return f"HTTP {r.status_code} fetching {url}"
+    ct = (r.headers.get("content-type") or "").lower()
+    if "html" in ct or "xml" in ct or ct.startswith("text/"):
+        text = _strip_html(r.text)
+    else:
+        text = f"[non-text content: {ct or 'unknown type'}, {len(r.content)} bytes]"
+    if len(text) > max_chars:
+        text = text[:max_chars] + f" …[truncated; {len(text)} chars total]"
+    return f"{url}\n\n{text}"
+
+
+def tool_http_headers(url: str) -> str:
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return "Only http(s) URLs are supported."
+    try:
+        try:
+            r = httpx.head(url, headers={"User-Agent": _WEB_UA}, timeout=10.0, follow_redirects=True)
+            if r.status_code in (405, 501):  # HEAD not allowed — fall back to GET
+                raise httpx.HTTPError("head not allowed")
+        except httpx.HTTPError:
+            r = httpx.get(url, headers={"User-Agent": _WEB_UA}, timeout=10.0, follow_redirects=True)
+    except Exception as e:  # noqa: BLE001
+        return f"Probe failed: {e}"
+    lines = [f"{url}", f"status: {r.status_code}", f"final URL: {str(r.url)}", "headers:"]
+    for k, v in sorted(r.headers.items()):
+        lines.append(f"  {k}: {v[:200]}")
+    return "\n".join(lines)
+
+
 TOOL_IMPLS = {
     "get_time": tool_get_time,
     "calculate": tool_calculate,
     "read_file": tool_read_file,
+    "web_search": tool_web_search,
+    "web_fetch": tool_web_fetch,
+    "http_headers": tool_http_headers,
 }
+
+# Named agent-tool presets ('tools_preset' on ChatRequest). Unknown/None sends
+# the full set (back-compat). The frontend maps personas to presets: NovaSec
+# -> security, default agent -> research.
+_PRESET_CORE = ["get_time", "calculate", "read_file"]
+_PRESET_RESEARCH = _PRESET_CORE + ["web_search", "web_fetch"]
+_PRESET_SECURITY = _PRESET_CORE + ["web_search", "web_fetch", "http_headers"]
+TOOL_PRESETS = {"core": _PRESET_CORE, "research": _PRESET_RESEARCH, "security": _PRESET_SECURITY}
+
+
+def _tools_for_preset(preset: Optional[str]) -> List[Dict[str, Any]]:
+    names = TOOL_PRESETS.get((preset or "").lower())
+    if not names:
+        return TOOLS
+    want = set(names)
+    return [t for t in TOOLS if t["function"]["name"] in want]
+
+
 
 
 def run_tool(name: str, arguments: Dict[str, Any]) -> str:
@@ -640,6 +827,7 @@ class ChatRequest(BaseModel):
     api_key: Optional[str] = None  # optional override from the UI
     max_tool_rounds: int = Field(default=5, ge=1, le=10)
     conversation_id: Optional[str] = None  # save messages to this conversation
+    tools_preset: Optional[str] = None  # agent mode: core | research | security (default: all tools)
 
 
 # ----------------------------------------------------------------------------
@@ -1465,8 +1653,11 @@ async def usage_summary(request: Request):
     return s
 
 
-@app.post("/api/chat")
-async def chat(req: ChatRequest):
+def _prepare_chat(req: ChatRequest):
+    """Shared request prep for /api/chat and /api/chat/stream: resolve provider +
+    key, inject the default system prompt when the client sent none, backfill
+    persisted reasoning traces onto replayed assistant turns (IFM/K2 contract),
+    and resolve the model. Returns (provider, api_key, messages, model)."""
     provider = req.provider if req.provider in PROVIDERS else DEFAULT_PROVIDER
     api_key = (req.api_key or "").strip() or _provider_key(provider)
     if not api_key:
@@ -1500,37 +1691,17 @@ async def chat(req: ChatRequest):
                 "when agent mode is enabled. This is an authorized lab/demo environment."
             )
         messages.insert(0, {"role": "system", "content": sys_content})
-    trace: List[Dict[str, Any]] = []
-    model = _resolve_model(provider, req.model)
-    eff = (req.reasoning_effort or "").strip().lower() or None
-
-    # If saving to history, capture the last user message that triggered this turn.
-    save_history = bool(req.conversation_id)
-    last_user_msg = None
-    if save_history:
-        for m in reversed(req.messages):
-            if m.get("role") == "user":
-                last_user_msg = m
-                break
 
     # IFM/K2 Horizon (and other reasoning models) require every replayed
     # assistant turn to carry its thinking trace — the model 400s with
     # "missing a thinking field" otherwise. The UI forwards `reasoning`, but any
-    # client that replays an assistant message without it (or any future
-    # provider with the same contract) needs the real trace backfilled. We
-    # persisted every assistant turn's reasoning to SQLite (db_save_message
-    # stores `reasoning`; _coerce_content is identity for plain strings, so the
-    # content used to match is exactly what the client replayed), so recover it
-    # here and re-inject as reasoning_content. For providers that produce no
-    # reasoning this set is empty -> no-op. See https://docs.ifm.ai -> Multi-turn.
-    if save_history:
-        # Recover the thinking trace for any replayed assistant turn that the
-        # client dropped, so reasoning models (e.g. IFM K2 Horizon) don't 400
-        # with "missing a thinking field" on the 2nd+ turn. We persisted each
-        # assistant turn's `reasoning` server-side; _coerce_content is identity
-        # for plain strings, so content matches exactly. No-op for providers
-        # that produce no reasoning (saved reasoning is null -> empty map).
-        # See https://docs.ifm.ai -> Multi-turn conversations.
+    # client that replays an assistant message without it needs the real trace
+    # backfilled. We persisted every assistant turn's reasoning to SQLite
+    # (db_save_message stores `reasoning`; _coerce_content is identity for plain
+    # strings, so the content used to match is exactly what the client
+    # replayed), so recover it here and re-inject as reasoning_content. No-op
+    # for providers that produce no reasoning. See https://docs.ifm.ai -> Multi-turn.
+    if req.conversation_id:
         _saved = db_get_conversation(req.conversation_id) or {}
         _by_reasoning = {
             m.get("content", ""): (m.get("reasoning") or m.get("reasoning_content"))
@@ -1545,6 +1716,25 @@ async def chat(req: ChatRequest):
             ):
                 _m["reasoning_content"] = _by_reasoning[_m["content"]]
 
+    model = _resolve_model(provider, req.model)
+    return provider, api_key, messages, model
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    provider, api_key, messages, model = _prepare_chat(req)
+    trace: List[Dict[str, Any]] = []
+    eff = (req.reasoning_effort or "").strip().lower() or None
+
+    # If saving to history, capture the last user message that triggered this turn.
+    save_history = bool(req.conversation_id)
+    last_user_msg = None
+    if save_history:
+        for m in reversed(req.messages):
+            if m.get("role") == "user":
+                last_user_msg = m
+                break
+
     # Extract any reasoning summary the provider returned (e.g. gpt-5 on Foundry)
     # so the UI can show it in a collapsible box rather than inline.
     def grab_reasoning(data: Dict[str, Any]) -> Optional[str]:
@@ -1554,7 +1744,10 @@ async def chat(req: ChatRequest):
 
     # Agent loop: let the model call tools, feed results back, repeat.
     if req.agent:
-        tools = TOOLS
+        tools = _tools_for_preset(req.tools_preset)
+        used_tools = False
+        finished = False
+        data = None
         for _ in range(req.max_tool_rounds):
             data = await call_llm(messages, model, api_key, provider, tools, eff)
             choice = data["choices"][0]
@@ -1567,10 +1760,15 @@ async def chat(req: ChatRequest):
             # The model may emit one or more tool calls.
             tool_calls = msg.get("tool_calls")
             if not tool_calls:
+                # The model answered — on round 1 directly, or after tool
+                # rounds. This response IS the final answer; never run another
+                # pass (Gemini & friends reject requests ending in a model turn).
                 messages.append(msg)
+                finished = True
                 break
 
             # Record the assistant turn (must include tool_calls for the API).
+            used_tools = True
             messages.append(msg)
             trace.append({"type": "assistant", "content": msg.get("content", "")})
 
@@ -1595,17 +1793,21 @@ async def chat(req: ChatRequest):
                     "content": result,
                 })
         else:
-            # Hit the round cap without a final answer.
+            # Hit the round cap with tool results still pending a summary.
             trace.append({
                 "type": "notice",
                 "content": "Reached maximum tool rounds; returning last model output.",
             })
-        # Final answer pass (no tools) to let the model summarise.
-        data = await call_llm(messages, model, api_key, provider, None, eff)
-        final_msg = data["choices"][0]["message"]
-        messages.append(final_msg)
-        if "usage" in data:
-            trace.append({"type": "usage", "data": data["usage"]})
+        if not finished:
+            # Cap reached: last message is a tool result — one final no-tools
+            # pass so the model produces a user-facing answer.
+            data = await call_llm(messages, model, api_key, provider, None, eff)
+            final_msg = data["choices"][0]["message"]
+            messages.append(final_msg)
+            if "usage" in data:
+                trace.append({"type": "usage", "data": data["usage"]})
+        else:
+            final_msg = data["choices"][0]["message"]
         # Persist to chat history if a conversation id was supplied.
         if save_history and last_user_msg:
             db_save_message(
@@ -1655,6 +1857,130 @@ async def chat(req: ChatRequest):
             "agent": False,
             "title": db_get_conversation_title(req.conversation_id) if req.conversation_id else None,
         })
+
+
+# ----------------------------------------------------------------------------
+# Streaming chat (SSE) — token-by-token relay of the provider's own stream.
+# Agent mode stays on the non-streaming endpoint (multi-round tool loop).
+# ----------------------------------------------------------------------------
+def _sse(obj: Dict[str, Any]) -> str:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(req: ChatRequest):
+    provider, api_key, messages, model = _prepare_chat(req)
+    if req.agent:
+        raise HTTPException(
+            status_code=400,
+            detail="Streaming is not available in agent mode (multi-round tool loop); use /api/chat.",
+        )
+    prov = PROVIDERS[provider]
+
+    async def gen():
+        content_parts: List[str] = []
+        reasoning_parts: List[str] = []
+        usage: Optional[Dict[str, Any]] = None
+        eff = (req.reasoning_effort or "").strip().lower() or None
+        try:
+            if provider == "cohere":
+                # Cohere's native stream shape differs; degrade gracefully to a
+                # single-chunk delivery so every provider streams for the UI.
+                data = await call_cohere(messages, model, api_key, None)
+                text = data["choices"][0]["message"].get("content") or ""
+                usage = data.get("usage")
+                content_parts.append(text)
+                yield _sse({"type": "delta", "content": text})
+            else:
+                payload: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+                if eff and ((provider == "foundry" and "gpt-5" in model) or provider == "upstage"):
+                    payload["reasoning_effort"] = eff
+                if provider == "ifm" and "K2" in model:
+                    payload["chat_template_kwargs"] = {"reasoning_effort": eff or "high"}
+                # Gemini keeps its primary->backup key failover on the stream path.
+                keys = GEMINI_API_KEYS if (provider == "gemini" and len(GEMINI_API_KEYS) > 1) else [api_key]
+                timeout = 180.0 if (eff or provider in ("ollama", "reka", "nvidia", "ifm")) else 90.0
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = None
+                    for i, key_try in enumerate(keys):
+                        resp = await client.send(
+                            client.build_request(
+                                "POST",
+                                f"{prov['base_url']}/chat/completions",
+                                headers=nova_headers(key_try, provider),
+                                json=payload,
+                            ),
+                            stream=True,
+                        )
+                        if resp.status_code in (401, 403, 429) and i + 1 < len(keys):
+                            await resp.aclose()
+                            continue
+                        break
+                    try:
+                        if resp.status_code != 200:
+                            body = (await resp.aread()).decode("utf-8", "replace")
+                            detail = _clean_error(resp, provider) if resp.status_code >= 400 else body[:200]
+                            yield _sse({"type": "error", "detail": detail, "status": resp.status_code})
+                            return
+                        async for line in resp.aiter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if not data:
+                                continue
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                            if isinstance(chunk.get("usage"), dict):
+                                usage = chunk["usage"]
+                            for ch in chunk.get("choices") or []:
+                                delta = ch.get("delta") or {}
+                                c = delta.get("content")
+                                if c:
+                                    content_parts.append(c)
+                                    yield _sse({"type": "delta", "content": c})
+                                r = delta.get("reasoning") or delta.get("reasoning_content")
+                                if r and isinstance(r, str):
+                                    reasoning_parts.append(r)
+                                    yield _sse({"type": "reasoning", "content": r})
+                    finally:
+                        await resp.aclose()
+
+            content = "".join(content_parts)
+            reasoning = "".join(reasoning_parts) or None
+            title = None
+            # Persist only complete turns — an aborted stream (Stop button)
+            # cancels this generator before reaching here.
+            if req.conversation_id:
+                for m in reversed(req.messages):
+                    if m.get("role") == "user":
+                        db_save_message(
+                            req.conversation_id, "user", m.get("content"),
+                            m.get("model"), m.get("provider"),
+                        )
+                        break
+                db_save_message(req.conversation_id, "assistant", content, model, provider, reasoning, usage)
+                title = db_get_conversation_title(req.conversation_id)
+            yield _sse({
+                "type": "done", "content": content, "reasoning": reasoning,
+                "usage": usage, "model": model, "provider": provider,
+                "title": title, "agent": False,
+            })
+        except asyncio.CancelledError:
+            # Client hit Stop / closed the tab — drop the partial turn quietly.
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning("chat stream failed: %s", e)
+            yield _sse({"type": "error", "detail": str(e)})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -1738,24 +2064,113 @@ class ImageRequest(BaseModel):
     """Body for the image-generation endpoint (POST /api/images)."""
     prompt: str
     model: Optional[str] = None
+    provider: Optional[str] = None  # cloudflare (default) | foundry
     n: int = Field(1, ge=1, le=4)
     size: str = "1024x1024"
     response_format: str = "url"  # "url" or "b64"
 
 
+def _image_provider_auto() -> str:
+    """First image-capable provider that is actually configured (not a placeholder)."""
+    if GEMINI_API_KEYS:
+        return "gemini"
+    if (CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID
+            and CLOUDFLARE_ACCOUNT_ID != "your-cloudflare-account-id"):
+        return "cloudflare"
+    return "foundry"
+
+
 @app.post("/api/images")
 async def generate_image(req: ImageRequest):
-    """Generate an image via an OpenAI-compatible /images/generations endpoint.
+    """Generate an image via a text-to-image model.
 
-    Currently routed to Azure Foundry (DALL·E 3 / gpt-image via
-    FOUNDRY_IMAGE_MODEL). The Foundry *chat* models in FOUNDRY_MODELS are
-    chat-only and will NOT generate images — the deployment named by
-    FOUNDRY_IMAGE_MODEL must be a real DALL·E / gpt-image deployment.
-
-    NOTE: the Foundry host (atrixi-6635-resource.services.ai.azure.com) is
-    unreachable on this offline box (DNS), so this route is implemented but
-    NOT exercised locally — it activates once Foundry DNS is reachable.
+    Auto route (default): Gemini's OpenAI-compat images endpoint
+    (gemini-2.5-flash-image — small free-tier quota, resets daily), then
+    Cloudflare Workers AI flux-1-schnell (needs REAL CLOUDFLARE_ACCOUNT_ID +
+    CLOUDFLARE_API_TOKEN), then the legacy Azure Foundry DALL·E path.
+    Returns OpenAI-ish {"data":[{"b64_json": ...}]} so the UI renders
+    data: URLs uniformly.
     """
+    provider = (req.provider or "").strip().lower() or _image_provider_auto()
+
+    if provider == "gemini":
+        model = req.model or os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+        keys = GEMINI_API_KEYS or []
+        if not keys:
+            raise HTTPException(400, "No Gemini key configured for image generation.")
+        last_status, last_text = 500, ""
+        async with httpx.AsyncClient(timeout=120.0) as c:
+            for i, key_try in enumerate(keys):
+                try:
+                    r = await c.post(
+                        f"{GEMINI_BASE_URL.rstrip('/')}/images/generations",
+                        headers={"Authorization": f"Bearer {key_try}", "Content-Type": "application/json"},
+                        json={"model": model, "prompt": req.prompt, "n": req.n,
+                              "response_format": "b64_json"},
+                    )
+                except httpx.TimeoutException as e:
+                    raise HTTPException(504, f"Gemini image request timed out: {e}")
+                except httpx.HTTPError as e:
+                    raise HTTPException(502, f"Gemini image request failed: {e}")
+                if r.status_code == 200:
+                    try:
+                        j = r.json()
+                    except json.JSONDecodeError:
+                        continue
+                    data = j.get("data") or []
+                    if data and (data[0].get("b64_json") or data[0].get("url")):
+                        return {"data": data, "provider": "gemini", "model": model}
+                    last_status, last_text = 502, str(j)[:300]
+                else:
+                    last_status, last_text = r.status_code, r.text[:300]
+                    # 401/403/429 on the primary -> transparently try the backup key.
+                    if r.status_code in (401, 403, 429) and i + 1 < len(keys):
+                        logger.warning("gemini image key rejected (%s) — trying backup", r.status_code)
+                        continue
+                    break
+        if last_status == 429:
+            raise HTTPException(429, "Gemini image quota exhausted (free tier) — try again later.")
+        raise HTTPException(502, f"Gemini image error (HTTP {last_status}): {last_text}")
+
+    if provider == "cloudflare":
+        if (not CLOUDFLARE_API_TOKEN or not CLOUDFLARE_ACCOUNT_ID
+                or CLOUDFLARE_ACCOUNT_ID == "your-cloudflare-account-id"):
+            raise HTTPException(
+                status_code=400,
+                detail="Cloudflare Workers AI is not configured (set a real CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN).",
+            )
+        model = req.model or CLOUDFLARE_IMAGE_MODEL
+        base = (CLOUDFLARE_BASE_URL or f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}").rstrip("/")
+        url = f"{base}/ai/run/{model}"
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as c:
+                r = await c.post(
+                    url,
+                    headers={"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+                             "Content-Type": "application/json"},
+                    json={"prompt": req.prompt},
+                )
+        except httpx.TimeoutException as e:
+            raise HTTPException(504, f"Cloudflare image request timed out: {e}")
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"Cloudflare image request failed: {e}")
+        ct = (r.headers.get("content-type") or "").lower()
+        if ct.startswith("image/"):
+            img_b64 = base64.standard_b64encode(r.content).decode("ascii")
+        else:
+            try:
+                j = r.json()
+            except json.JSONDecodeError:
+                raise HTTPException(502, f"Cloudflare image error (HTTP {r.status_code}): {r.text[:300]}")
+            if r.status_code != 200 or j.get("success") is False or not (j.get("result") or {}).get("image"):
+                errs = "; ".join(str(e_.get("message", e_)) for e_ in (j.get("errors") or []))[:300]
+                raise HTTPException(502, f"Cloudflare image error (HTTP {r.status_code}): {errs or str(j)[:300]}")
+            img_b64 = j["result"]["image"]
+        return {"data": [{"b64_json": img_b64}], "provider": "cloudflare", "model": model}
+
+    # ---- legacy Foundry DALL·E path ----
+    if provider != "foundry":
+        raise HTTPException(400, f"Unknown image provider '{provider}' (use cloudflare or foundry).")
     if not FOUNDRY_API_KEY:
         raise HTTPException(
             status_code=400,

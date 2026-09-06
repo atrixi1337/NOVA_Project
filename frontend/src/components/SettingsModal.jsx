@@ -38,6 +38,7 @@ export default function SettingsModal({
   providers, defaultProvider, provider, model,
   setProvider, setModel, setAgent, setReasoning,
   agent, reasoningEffort,
+  toolsPreset = 'research', setToolsPreset,
   ollama, ollamaBusy, ollamaLoad, ollamaUnload,
   health,
   malayalamMode = false,
@@ -169,11 +170,34 @@ export default function SettingsModal({
                 </select>
               </div>
             </div>
+            <div>
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="text-muted">Agent tools</span>
+                <span className="text-text font-medium">{toolsPreset}</span>
+              </div>
+              <div className="mt-1">
+                <select
+                  value={toolsPreset}
+                  onChange={(e) => setToolsPreset(e.target.value)}
+                  disabled={securityMode}
+                  className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors disabled:opacity-60"
+                >
+                  <option value="core">Core — time, calculate, read_file</option>
+                  <option value="research">Research — core + web search & fetch</option>
+                  <option value="security">Recon — research + HTTP header probe</option>
+                </select>
+                <p className="text-[11px] text-muted/60 mt-1">
+                  {securityMode
+                    ? 'Locked to Recon while NovaSec is active.'
+                    : 'NovaSec automatically switches agent mode to the Recon set.'}
+                </p>
+              </div>
+            </div>
           </div>
 
-          {/* ── Image Generation (Foundry DALL·E) ── */}
+          {/* ── Image Generation (Gemini → Cloudflare → Foundry, auto) ── */}
           <div className="space-y-3">
-            <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">Image Generation (Foundry DALL·E)</h4>
+            <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">Image Generation</h4>
             <div>
               <label className="block text-[12px] text-muted mb-1">Prompt</label>
               <textarea

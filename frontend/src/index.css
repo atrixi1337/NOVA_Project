@@ -259,6 +259,15 @@ details[open] > summary .summary-chevron { transform: rotate(180deg); }
 }
 .animate-pulse { animation: pulse 1.5s ease-in-out infinite; }
 
+/* streaming caret at the end of a token-by-token reply */
+.stream-caret {
+  display: inline-block;
+  color: #c9a227;
+  animation: pulse 1s ease-in-out infinite;
+  margin-left: 2px;
+  font-size: 0.9em;
+}
+
 /* ── Mobile: keep assistant reply bubbles within the viewport ──
    Long unbroken strings, wide tables, and images must wrap within the
    message bubble instead of forcing horizontal scroll. Code blocks are the

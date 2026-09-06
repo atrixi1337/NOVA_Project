@@ -60,8 +60,10 @@ function enhanceCodeBlocks(root) {
 }
 
 // Renders markdown for assistant messages, then attaches the code-block
-// header bars (language + copy) via the effect below.
-function Markdown({ content }) {
+// header bars (language + copy) via the effect below. Exported for reuse
+// (Arena columns render provider outputs with the same pipeline). While
+// `streaming`, a blinking caret trails the reply.
+export function Markdown({ content, streaming = false }) {
   const html = renderMarkdown(content)
   const ref = useRef(null)
 
@@ -71,7 +73,12 @@ function Markdown({ content }) {
     enhanceCodeBlocks(root)
   }, [html])
 
-  return <div className="md" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />
+  return (
+    <div className={streaming ? 'md md-streaming' : 'md'}>
+      <div ref={ref} dangerouslySetInnerHTML={{ __html: html }} />
+      {streaming && <span className="stream-caret" aria-hidden="true">▍</span>}
+    </div>
+  )
 }
 
 // Renders message content. Handles markdown for assistant messages, plain text
@@ -113,7 +120,7 @@ function messageText(content) {
   return ''
 }
 
-export default function Message({ msg }) {
+export default function Message({ msg, streaming = false }) {
   const isUser = msg.role === 'user'
   const hasContent = msg.content && (
     typeof msg.content === 'string'
@@ -162,7 +169,7 @@ export default function Message({ msg }) {
             {isUser ? (
               <UserContent content={msg.content} />
             ) : hasContent ? (
-              <Markdown content={msg.content} />
+              <Markdown content={msg.content} streaming={streaming && !isUser} />
             ) : (
               <div className="text-muted italic">…thinking</div>
             )}
