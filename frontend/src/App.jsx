@@ -7,6 +7,7 @@ import Message from './components/Message.jsx'
 import AgentTrace from './components/AgentTrace.jsx'
 import ReasoningBox from './components/ReasoningBox.jsx'
 import Analyzer from './components/Analyzer.jsx'
+import UsageDashboard from './components/UsageDashboard.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import { Sparkle, AttachmentPaperclip, Remove, SendSolid, Shield } from './components/Icons.jsx'
 
@@ -363,7 +364,7 @@ export default function App() {
 
         {/* Tabs */}
         <div className="flex gap-1 px-4 pt-2 border-b border-border bg-panel">
-          {[['chat', 'Chat'], ['analyzer', 'Log Analyzer']].map(([id, label]) => (
+          {[['chat', 'Chat'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage']].map(([id, label]) => (
             <button
               key={id}
               onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
@@ -533,6 +534,8 @@ export default function App() {
               </div>
             </div>
           </>
+        ) : tab === 'usage' ? (
+          <UsageDashboard />
         ) : (
           <div className="flex-1 overflow-y-auto">
             <Analyzer provider={provider} model={model} reasoningEffort={reasoningEffort} />

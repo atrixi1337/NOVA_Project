@@ -53,6 +53,14 @@ export const api = {
   models: () => jget('/api/models'),
   health: () => jget('/api/health'),
 
+  // Usage dashboard: aggregate token usage from the local usage_ledger.
+  // Optional filters: ?provider=.. &model=.. &days=N &recent=1
+  usage: (params = {}) => {
+    const q = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) if (v != null && v !== '') q.set(k, v)
+    return jget(q.toString() ? '/api/usage?' + q.toString() : '/api/usage')
+  },
+
   // ollama
   ollamaStatus: () => jget('/api/ollama/status'),
   ollamaLoad: () => jpost('/api/ollama/load', {}),
