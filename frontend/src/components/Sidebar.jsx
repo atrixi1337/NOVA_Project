@@ -22,7 +22,8 @@ function truncate(text, n) {
 }
 
 // Conversation list sidebar with new-chat, rename, delete, settings, and a
-// collapse-to-icon-rail toggle (desktop). On mobile it remains a full drawer.
+// collapse-to-icon-rail toggle (desktop). On mobile (< md) it stays a full
+// off-canvas drawer controlled by the `open` prop + backdrop.
 export default function Sidebar({
   conversations,
   currentId,
@@ -64,17 +65,17 @@ export default function Sidebar({
 
   const sorted = [...conversations].sort((a, b) => b.updated_at - a.updated_at)
 
-  // Collapsed = desktop icon rail: no text labels, compact dot list.
+  // Collapsed = desktop icon rail: labels hidden, conversation list becomes dots.
   const isRail = !!collapsed
 
   return (
     <aside
       className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-sidebar overflow-hidden
-        -translate-x-full md:translate-x-0 transition-[transform, width] duration-200 ease-in-out
+        -translate-x-full md:static md:translate-x-0 transition-[transform, width] duration-200 ease-in-out
         ${open ? 'translate-x-0' : '-translate-x-full'}
-        ${isRail ? 'w-64 min-w-[240px] max-w-80 md:w-16 md:min-w-[64px] md:max-w-[64px]' : 'w-64 min-w-[240px] max-w-80'}`}
+        ${isRail ? 'w-64 min-w-[240px] max-w-80 md:w-16 md:min-w-[56px]' : 'w-64 min-w-[240px] max-w-80'}`}
     >
-      {/* top: brand + collapse chevron + settings */}
+      {/* top: brand + collapse chevron */}
       <div className="p-3 border-b border-border">
         <div className="flex items-center justify-between px-1 py-1">
           <div className="flex items-center gap-2.5">
@@ -83,43 +84,20 @@ export default function Sidebar({
               Sallaapam
             </span>
           </div>
-          <div className="flex items-center gap-0.5">
-            {!isRail && (
-              <button
-                onClick={onToggleCollapse}
-                className="md:inline-flex hidden p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors"
-                title="Collapse sidebar"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-            )}
-            <button
-              onClick={() => { onSettings(); onClose?.() }}
-              className="p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors"
-              title="Settings"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                  d="M11.983 2.017a1 1 0 011.414 0l.03.031L19 8.05l4 4-6 6-4-4-4-4 6-6a1 1 0 011-1l.032.003.082.003 3.918-.933zM4 20h16a2 2 0 012 2H2a2 2 0 012-2z" />
-              </svg>
-            </button>
-            {isRail && (
-              <button
-                onClick={onToggleCollapse}
-                className="md:inline-flex hidden p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors"
-                title="Expand sidebar"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            )}
-          </div>
+          <button
+            onClick={onToggleCollapse}
+            className="p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors"
+            title={isRail ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {isRail ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+          </button>
         </div>
 
         <button
           onClick={() => { onNew(); onClose?.() }}
           disabled={loading?.new}
           className={`mt-1 w-full flex items-center gap-2 px-3 py-2 text-[13px] font-medium text-[#1a1000] bg-accent rounded-xl hover:brightness-105 disabled:opacity-50 transition-all
-            ${isRail ? 'justify-center px-2' : 'justify-start'}`}
+            ${isRail ? 'justify-center' : 'justify-start'}`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -248,7 +226,7 @@ export default function Sidebar({
         )}
       </nav>
 
-      {/* bottom */}
+      {/* bottom: settings */}
       <div className="p-2 border-t border-border">
         <button
           onClick={() => { onSettings(); onClose?.() }}
