@@ -54,6 +54,9 @@ server restart** — a `git pull` (or file copy) updates the UI immediately.
   *quick* tunnel changes the public URL. Use the stable named tunnel `nova`.
 
 ## Hosting notes
+- Gateway API keys (`gateway_keys` table, stored hashed) and the auth
+  passphrase live in the SQLite DB and `.env` — both are included in backups,
+  so a restore brings keys and access control back with everything else.
 - Local Ollama is the only uncensored provider and needs ~2.7–4 B params of VRAM
   (not feasible on this phone's SoC). All other providers are **cloud + censored**
   and still apply safety filters regardless of system prompt.

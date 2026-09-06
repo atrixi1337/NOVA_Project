@@ -74,6 +74,10 @@ OpenAI-compatible agent (OpenCode, Aider, LangChain, curl…) then points at
 - every call metered into the usage ledger as actor `gw:<key-name>` — per-key
   tokens/calls appear right in the Gateway tab, and the Usage tab's by-person
   table includes them. Rate limit applies per key.
+- the Gateway tab's snippets advertise `NOVA_PUBLIC_URL` when set
+  (e.g. `https://nova.terminalflaw.xyz`), so agents on other machines always
+  get the public domain even if you configure them while browsing via
+  localhost/LAN. Falls back to the browsing origin when unset.
 
 **Usage accounting** — every assistant turn lands in a `usage_ledger` that
 survives chat deletion: totals, by-model, by-provider, **by-person** (see auth),
@@ -188,6 +192,12 @@ NOVA_AUTH_SECRET=<random string>                # signs the session cookie
 GEMINI_API_KEY=...                    # + GEMINI_API_KEY_BACKUP for failover
 CLOUDFLARE_ACCOUNT_ID=...             # real values unlock flux image gen
 NOVA_IMAGE_MODEL=gemini-2.5-flash-image
+
+# web search (🌐 toggle) + gateway
+YOU_API_KEY=...                       # you.com search API (else DuckDuckGo)
+NOVA_PUBLIC_URL=https://nova.example  # base URL advertised in Gateway snippets
+NOVA_RATE_LIMIT_PER_MIN=60            # per-actor chat/gateway limit (0 = off)
+NOVA_DAILY_TOKEN_CAP=0                # per-actor daily token cap (0 = off)
 ```
 
 `requirements.txt` pins `uvicorn[standard]`, which fails to build on Termux
