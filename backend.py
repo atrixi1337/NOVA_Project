@@ -1572,6 +1572,78 @@ async def health():
 
 
 # ----------------------------------------------------------------------------
+# Phone-host health (read-only). Exposed on /api/host so the UI's header HUD can
+# show RAM / disk / CPU load / uptime — and, when the Termux:API app is present,
+# battery % + Wi-Fi. Auth-gated by the global middleware (like /api/usage), so
+# host stats are never exposed to anonymous tunnel probes.
+# ----------------------------------------------------------------------------
+def _host_stats() -> dict:
+    import subprocess
+
+    def _termux(cmd: List[str]) -> Optional[dict]:
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=4).stdout
+            return json.loads(out) if out else None
+        except Exception:
+            return None
+
+    # RAM (KiB) from /proc/meminfo — always available, no Termux:API needed.
+    ram: Dict[str, Optional[int]] = {}
+    try:
+        for line in open("/proc/meminfo"):
+            k, _, v = line.partition(":")
+            if k in ("MemTotal", "MemAvailable"):
+                ram[k.lower()] = int(v.split()[0])
+    except Exception:
+        pass
+
+    # Disk hosting the project + history DB (the phone's user-data partition).
+    disk: Dict[str, Any] = {"path": os.path.dirname(os.path.abspath(__file__))}
+    try:
+        sv = os.statvfs(disk["path"])
+        bpb = sv.f_frsize
+        disk.update({
+            "total": sv.f_blocks * bpb,
+            "free": sv.f_bavail * bpb,
+            "used": (sv.f_blocks - sv.f_bavail) * bpb,
+        })
+    except Exception:
+        disk.update({"total": None, "free": None, "used": None})
+
+    # CPU load + phone uptime.
+    load: Optional[List[float]] = None
+    try:
+        load = [round(float(x), 2) for x in open("/proc/loadavg").read().split()[:3]]
+    except Exception:
+        pass
+    uptime_s: Optional[float] = None
+    try:
+        uptime_s = round(float(open("/proc/uptime").read().split()[0]), 1)
+    except Exception:
+        pass
+
+    battery = _termux(["termux-battery-get"])
+    wifi = _termux(["termux-wifi-info"])
+
+    return {
+        "ram_kb": ram,
+        "disk": disk,
+        "load1_load5_load15": load,
+        "uptime_s": uptime_s,
+        "battery": battery,
+        "wifi": wifi,
+        "note": ("Battery % and Wi-Fi need the 'Termux:API' Android app from F-Droid "
+                 "plus its runtime permission grants; install once and they appear here."),
+    }
+
+
+@app.get("/api/host")
+async def host():
+    """Phone-host health probe (auth-gated via the global middleware)."""
+    return _host_stats()
+
+
+# ----------------------------------------------------------------------------
 # Local Ollama model load / unload / status
 # ----------------------------------------------------------------------------
 @app.get("/api/ollama/status")

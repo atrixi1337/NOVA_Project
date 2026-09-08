@@ -51,6 +51,8 @@ export const api = {
   // models / providers
   models: () => jget('/api/models'),
   health: () => jget('/api/health'),
+  // Phone-host health (RAM/disk/load/uptime + battery/WiFi via Termux:API).
+  host: () => jget('/api/host'),
 
   // shared-passphrase auth: exchange the passphrase for a 30-day cookie
   login: async (passphrase) => {

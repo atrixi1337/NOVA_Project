@@ -19,14 +19,88 @@ function Clock() {
   )
 }
 
-// Health dot: green = backend reachable, amber pulsing = unknown/unreachable.
-function HealthDot({ health }) {
-  const ok = !!health && health.status === 'ok'
+function fmtBytes(b) {
+  if (b == null) return '—'
+  if (b > 1024 ** 4) return `${(b / 1024 ** 4).toFixed(1)} TB`
+  if (b > 1024 ** 3) return `${(b / 1024 ** 3).toFixed(1)} GB`
+  if (b > 1024 ** 2) return `${(b / 1024 ** 2).toFixed(1)} MB`
+  return `${Math.round(b)} B`
+}
+function fmtGB(kb) {
+  return kb == null ? '—' : `${(kb / 1024 / 1024).toFixed(1)} GB`
+}
+function fmtUptime(s) {
+  if (s == null) return '—'
+  const n = Math.floor(s)
+  const d = Math.floor(n / 86400)
+  const h = Math.floor((n % 86400) / 3600)
+  const m = Math.floor((n % 3600) / 60)
+  return d ? `${d}d ${h}h` : `${h}h ${m}m`
+}
+
+// Tapping the header health dot reveals this phone-host HUD (RAM / disk / CPU
+// load / uptime +, when Termux:API is installed, battery % and Wi-Fi).
+function HostPopover({ host, onClose }) {
+  const ram = (host && host.ram_kb) || {}
+  const disk = (host && host.disk) || {}
+  const b = host && host.battery
+  const w = host && host.wifi
+  const batt = b
+    ? `${b.level ?? b.percentage ?? '—'}% · ${b.status ?? '—'}`
+    : '— (install the Termux:API app)'
+  const wifi = w
+    ? `${w.ssid ?? w.Ssid ?? '—'} (${w.rssi != null ? w.rssi : '—'})`
+    : '— (install the Termux:API app)'
+  const rows = [
+    ['RAM', `${fmtGB(ram.memavailable_kb)} / ${fmtGB(ram.memtotal_kb)} (avail/total)`],
+    ['Disk', `${fmtBytes(disk.free)} free / ${fmtBytes(disk.total)}`],
+    ['Load', Array.isArray(host && host.load1_load5_load15) ? host.load1_load5_load15.join(' ') : '—'],
+    ['Uptime', fmtUptime(host && host.uptime_s)],
+    ['Battery', batt],
+    ['Wi-Fi', wifi],
+  ]
   return (
-    <span
-      title={ok ? 'Backend online' : 'Backend unreachable / unknown'}
-      className={`inline-block w-2 h-2 rounded-full ${ok ? 'bg-ok' : 'bg-err animate-pulse'}`}
-    />
+    <div
+      className="fixed inset-0 z-40 flex items-start justify-end pt-14 pr-3"
+      onClick={onClose}
+    >
+      <div
+        className="w-64 max-w-[90vw] bg-panel2 border border-border rounded-lg shadow-xl text-[11px]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-3 py-1.5 border-b border-border small-caps text-accent2">Phone host</div>
+        <table className="w-full">
+          <tbody>
+            {rows.map(([k, v]) => (
+              <tr key={k}>
+                <td className="px-3 py-1 text-muted">{k}</td>
+                <td className="px-3 py-1 text-text2 font-mono text-right break-words">{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="px-3 py-1 border-t border-border text-[10px] text-muted">Refreshes every 15s</div>
+      </div>
+    </div>
+  )
+}
+
+// Health dot: green = backend reachable, amber pulsing = unknown/unreachable.
+// Tap it (when unlocked and host data is loaded) to reveal the host HUD.
+function HealthDot({ health, host }) {
+  const ok = !!health && health.status === 'ok'
+  const [pop, setPop] = useState(false)
+  const hasHost = !!host
+  const toggle = hasHost ? () => setPop((p) => !p) : undefined
+  return (
+    <>
+      <span
+        onClick={toggle}
+        title={ok ? 'Backend online — tap for host stats' : 'Backend unreachable / unknown'}
+        className={`inline-block w-2.5 h-2.5 rounded-full ${hasHost ? 'cursor-pointer' : ''} ${ok ? 'bg-ok' : 'bg-err animate-pulse'}`}
+      />
+      {pop && hasHost && <HostPopover host={host} onClose={() => setPop(false)} />}
+    </>
   )
 }
 
@@ -34,7 +108,7 @@ function HealthDot({ health }) {
 // blinking indicator, a backend health dot, a provider quick-switch dropdown,
 // and a small-caps model read-out. Desktop also gets a live clock; on phones
 // the bar stays lean (no logo/clock) so nothing overlaps or clips.
-export default function Header({ onSettings, onMenu, providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health }) {
+export default function Header({ onSettings, onMenu, providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health, host }) {
   const hasProviders = onSwitchProvider && Object.keys(providers).length > 0
   return (
     <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 bg-panel border-b border-border">
@@ -56,7 +130,7 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
         </span>
       </div>
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-        <HealthDot health={health} />
+        <HealthDot health={health} host={host} />
         <span className="hidden sm:inline"><Clock /></span>
         {hasProviders ? (
           <select

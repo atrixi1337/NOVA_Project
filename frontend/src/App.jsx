@@ -142,6 +142,7 @@ export default function App() {
     try { return localStorage.getItem('nova_security_mode') === 'true' } catch { return false }
   })
   const [health, setHealth] = useState(null)
+  const [host, setHost] = useState(null)
 
   // Shared-passphrase auth: the API 401s until this browser logs in once.
   const [locked, setLocked] = useState(false)
@@ -193,6 +194,17 @@ export default function App() {
     }, 30000)
     return () => clearInterval(id)
   }, [])
+
+  // Phone-host stats (RAM/disk/load/uptime + battery/WiFi via Termux:API) power
+  // the header HUD. /api/host is auth-gated, so only poll once unlocked and stop
+  // while the lock screen is up.
+  useEffect(() => {
+    if (locked) return
+    const probe = () => api.host().then(setHost).catch(() => setHost(null))
+    probe()
+    const id = setInterval(probe, 15000)
+    return () => clearInterval(id)
+  }, [locked])
 
   // Elapsed-seconds counter shown in the "thinking" indicator.
   useEffect(() => {
@@ -673,6 +685,7 @@ export default function App() {
           activeProvider={activeProvider}
           onSwitchProvider={switchProvider}
           health={health}
+          host={host}
         />
 
         {/* Tabs (shrink-0: a tall tab body must never squash the bar to zero) */}
