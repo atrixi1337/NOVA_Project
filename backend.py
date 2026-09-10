@@ -13,6 +13,8 @@ API key server-side only (never shipped to the browser).
 import json
 import logging
 import os
+import socket
+import ipaddress
 import io
 import base64
 import hashlib
@@ -775,12 +777,93 @@ def tool_web_search(query: str, max_results: int = 5) -> str:
     return "\n".join(out)
 
 
+# ---- SSRF guard for the public-fetch agent tools --------------------------
+# web_fetch / http_headers follow URLs the model produces, so they must refuse
+# internal/private/cloud-metadata targets (localhost, 10/8, 192.168/16,
+# 169.254/16, ::1, 0.0.0.0, ...). The host is resolved and any non-public
+# address is rejected; each redirect hop is validated too (no auto-follow),
+# so a 302 that lands on a private IP is blocked.
+from urllib.parse import urlparse, urljoin  # noqa: E402
+
+_FETCH_MAX_HOPS = 5
+
+
+def _ip_blocked(ip) -> bool:
+    """True if an address must never be fetched (SSRF blocklist)."""
+    return bool(
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_multicast or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _host_is_public(hostname: str) -> bool:
+    """True if the host is public/routable. Fail-closed: local names,
+    private IP literals, and unresolvable hosts all return False."""
+    h = (hostname or "").strip().rstrip(".").lower()
+    if not h or h in ("localhost", "ip.local", "broadcast", "router", "gateway") or h.endswith(".localhost"):
+        return False
+    try:
+        return not _ip_blocked(ipaddress.ip_address(h))
+    except ValueError:
+        pass  # not an IP literal — resolve and inspect below
+    try:
+        infos = socket.getaddrinfo(h, None)
+    except socket.gaierror:
+        return False
+    if not infos:
+        return False
+    return not any(_ip_blocked(ipaddress.ip_address(sock[4][0])) for sock in infos)
+
+
+def _url_is_public(url: str) -> tuple:
+    """(ok, reason): validate scheme + host before fetching, and before
+    following any redirect hop."""
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False, "malformed URL"
+    if p.scheme not in ("http", "https"):
+        return False, "only http(s) URLs may be fetched"
+    if not p.hostname:
+        return False, "URL has no hostname"
+    if not _host_is_public(p.hostname):
+        return False, f"refusing internal/private/unresolvable host ({p.hostname})"
+    return True, ""
+
+
+def _http_fetch(method: str, url: str, timeout: float):
+    """Issue method(url) enforcing the SSRF blocklist on the initial host AND
+    every redirect target. Raises ValueError(reason) if any hop is blocked."""
+    ok, why = _url_is_public(url)
+    if not ok:
+        raise ValueError(why)
+    with httpx.Client(follow_redirects=False, timeout=timeout) as client:
+        cur, cur_method = url, method
+        for _ in range(_FETCH_MAX_HOPS + 1):
+            ok, why = _url_is_public(cur)
+            if not ok:
+                raise ValueError(why)
+            r = client.request(cur_method, cur, headers={"User-Agent": _WEB_UA})
+            loc = r.headers.get("location")
+            if 300 <= r.status_code < 400 and loc:
+                nxt = urljoin(cur, loc)
+                if not (nxt.startswith("http://") or nxt.startswith("https://")):
+                    raise ValueError("redirect to non-http scheme")
+                cur, cur_method = nxt, "GET"
+                continue
+            return r
+        raise RuntimeError("too many redirects")
+
+
 def tool_web_fetch(url: str, max_chars: int = 4000) -> str:
     if not (url.startswith("http://") or url.startswith("https://")):
         return "Only http(s) URLs are supported."
     max_chars = max(200, min(max_chars, 20000))
     try:
-        r = httpx.get(url, headers={"User-Agent": _WEB_UA}, timeout=15.0, follow_redirects=True)
+        r = _http_fetch("GET", url, timeout=15.0)
+    except ValueError as e:
+        return f"Blocked: {e}"
     except Exception as e:  # noqa: BLE001
         return f"Fetch failed: {e}"
     if r.status_code >= 400:
@@ -800,11 +883,13 @@ def tool_http_headers(url: str) -> str:
         return "Only http(s) URLs are supported."
     try:
         try:
-            r = httpx.head(url, headers={"User-Agent": _WEB_UA}, timeout=10.0, follow_redirects=True)
+            r = _http_fetch("HEAD", url, timeout=10.0)
             if r.status_code in (405, 501):  # HEAD not allowed — fall back to GET
                 raise httpx.HTTPError("head not allowed")
         except httpx.HTTPError:
-            r = httpx.get(url, headers={"User-Agent": _WEB_UA}, timeout=10.0, follow_redirects=True)
+            r = _http_fetch("GET", url, timeout=10.0)
+    except ValueError as e:
+        return f"Blocked: {e}"
     except Exception as e:  # noqa: BLE001
         return f"Probe failed: {e}"
     lines = [f"{url}", f"status: {r.status_code}", f"final URL: {str(r.url)}", "headers:"]
@@ -992,13 +1077,19 @@ async def admin_restart(request: Request):
     if getattr(request.state, "actor", "") != "owner":
         raise HTTPException(403, "Only the owner token can restart the service.")
     import subprocess
-    # Fire-and-forget: respond first, then exit; phone-watchdog.sh brings the
-    # service back. (Bracket pattern so the shell can't pkill itself.)
-    subprocess.Popen(
-        "sleep 1; pkill -f '[u]vicorn backend:app'",
-        shell=True, start_new_session=True,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    import threading
+    import time
+
+    def _delayed_restart() -> None:
+        # Fire-and-forget: respond first, then kill uvicorn; phone-watchdog.sh
+        # brings the service back. Backgrounded off the request thread (no shell).
+        time.sleep(1)
+        subprocess.run(
+            ["pkill", "-f", "[u]vicorn backend:app"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+    threading.Thread(target=_delayed_restart, daemon=True).start()
     return {"ok": True, "detail": "Restarting; the watchdog restores service within ~90s."}
 
 
