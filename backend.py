@@ -1622,8 +1622,8 @@ def _host_stats() -> dict:
     except Exception:
         pass
 
-    battery = _termux(["termux-battery-get"])
-    wifi = _termux(["termux-wifi-info"])
+    battery = _termux(["termux-battery-status"])
+    wifi = _termux(["termux-wifi-connectioninfo"])
 
     return {
         "ram_kb": ram,
