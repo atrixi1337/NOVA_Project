@@ -1632,8 +1632,11 @@ def _host_stats() -> dict:
         "uptime_s": uptime_s,
         "battery": battery,
         "wifi": wifi,
-        "note": ("Battery % and Wi-Fi need the 'Termux:API' Android app from F-Droid "
-                 "plus its runtime permission grants; install once and they appear here."),
+        "note": ("Battery % + Wi-Fi come from Termux:API "
+                 "(termux-battery-status / termux-wifi-connectioninfo); they appear once "
+                 "the Termux:API app is installed with its permissions granted. "
+                 "load1/load5/load15 and uptime are null: Android's SELinux denies the "
+                 "app user read access to /proc/loadavg and /proc/uptime."),
     }
 
 
