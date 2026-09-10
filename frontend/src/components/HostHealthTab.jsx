@@ -4,9 +4,14 @@ import { AuthError } from '../api.js'
 
 // ---- formatters -----------------------------------------------------------
 const fmt = (n) => (typeof n === 'number' ? n.toLocaleString() : '—')
-const gb = (bytes) =>
+const toGiB = (bytes) =>
   typeof bytes === 'number' && bytes >= 0
     ? (bytes / (1024 ** 3)).toFixed(1) + ' GB'
+    : '—'
+// /proc/meminfo reports RAM in KiB (kB), not bytes — never divide by 1024^3.
+const kibToGiB = (kib) =>
+  typeof kib === 'number' && kib >= 0
+    ? (kib / (1024 ** 2)).toFixed(1) + ' GB'
     : '—'
 const pctOf = (used, total) =>
   typeof used === 'number' && typeof total === 'number' && total > 0
@@ -22,7 +27,8 @@ const dur = (s) => {
 const dBm = (v) => (typeof v === 'number' ? v + ' dBm' : '—')
 
 // A stat card with a usage bar (RAM / Disk).
-function UsageBar({ label, used, total, unit }) {
+function UsageBar({ label, used, total, kib }) {
+  const fmt = kib ? kibToGiB : toGiB
   const p = pctOf(used, total)
   const barPct = p === null ? 0 : p
   const hue =
@@ -34,7 +40,7 @@ function UsageBar({ label, used, total, unit }) {
     <div className="rounded-xl border border-border bg-panel2 p-3 flex flex-col gap-2">
       <div className="text-[10px] uppercase text-muted tracking-wider">{label}</div>
       <div className={`text-[19px] font-medium ${hue}`}>
-        {used != null ? gb(used) : '—'}<span className="text-[12px] text-muted"> / {total != null ? gb(total) : '—'}</span>
+        {used != null ? fmt(used) : '—'}<span className="text-[12px] text-muted"> / {total != null ? fmt(total) : '—'}</span>
       </div>
       <div className="h-2 rounded bg-black/35 overflow-hidden">
         <div
@@ -45,7 +51,6 @@ function UsageBar({ label, used, total, unit }) {
           }}
         />
       </div>
-      {unit && <div className="text-[10px] text-muted">{unit}</div>}
     </div>
   )
 }
@@ -135,6 +140,7 @@ export default function HostHealthTab() {
             label="RAM used"
             used={ram.memtotal && ram.memavailable ? ram.memtotal - ram.memavailable : null}
             total={ram.memtotal}
+            kib
           />
           <UsageBar label="Disk used" used={disk.used} total={disk.total} />
           <Stat
@@ -142,15 +148,15 @@ export default function HostHealthTab() {
             value={loadavg?.length === 3 ? loadavg.join(' / ') : '—'}
             sub={
               loadavg?.length === 3
-                ? 'from /proc/loadavg'
-                : 'null — Android restricts /proc/loadavg'
+                ? null
+                : 'null — Android restricts /proc/loadavg and no uptime binary is available'
             }
             muted
           />
           <Stat
             label="Phone uptime"
             value={dur(up)}
-            sub={typeof up === 'number' ? '' : 'null — Android restricts /proc/uptime'}
+            sub={typeof up === 'number' ? null : 'null — Android restricts /proc/uptime and no uptime binary is available'}
             muted
           />
           <Stat

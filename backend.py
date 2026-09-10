@@ -1577,6 +1577,62 @@ async def health():
 # battery % + Wi-Fi. Auth-gated by the global middleware (like /api/usage), so
 # host stats are never exposed to anonymous tunnel probes.
 # ----------------------------------------------------------------------------
+def _uptime_to_seconds(dur: str) -> float:
+    """Parse the 'up <duration>' portion of `uptime` output into seconds.
+
+    Handles the common coreutils/toybox forms: '7 days, 22:01',
+    '2 days, 3:04:05', '5:06', '18:22:01', '5 min'. Returns 0 on failure.
+    """
+    import re
+    days = hours = minutes = seconds = 0
+    try:
+        m = re.search(r'(\d+)\s*day', dur, re.I)
+        if m: days = int(m.group(1))
+        mt = re.search(r'(\d+):(\d+)(?::(\d+))?', dur)
+        if mt:
+            parts = [int(p) for p in mt.groups() if p is not None]
+            if len(parts) == 2: hours, minutes = parts
+            else: hours, minutes, seconds = parts
+        elif re.search(r'(\d+)\s*min', dur, re.I):
+            minutes = int(re.search(r'(\d+)\s*min', dur, re.I).group(1))
+    except Exception:
+        pass
+    return float(days * 86400 + hours * 3600 + minutes * 60 + seconds)
+
+
+def _load_and_uptime():
+    """Return (load1/5/15, uptime_seconds). /proc first (Linux/VPS); on Android
+    the app user can't read /proc/loadavg or /proc/uptime, so fall back to the
+    `uptime` binary (toybox), which still has the privilege to read them."""
+    import re, subprocess
+    load: Optional[List[float]] = None
+    uptime_s: Optional[float] = None
+    # Primary: /proc (works everywhere except locked-down Android app sandbox).
+    try:
+        load = [round(float(x), 2) for x in open("/proc/loadavg").read().split()[:3]]
+    except Exception:
+        pass
+    try:
+        uptime_s = round(float(open("/proc/uptime").read().split()[0]), 1)
+    except Exception:
+        pass
+    if load is not None and uptime_s is not None:
+        return load, uptime_s
+    # Fallback: `uptime` binary — parses "up <dur>,  load average: 1, 5, 15".
+    try:
+        out = subprocess.run(["uptime"], capture_output=True, text=True, timeout=4).stdout
+        if out:
+            m = re.search(r'load average:\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)', out, re.I)
+            if m and load is None:
+                load = [round(float(m.group(1)), 2), round(float(m.group(2)), 2), round(float(m.group(3)), 2)]
+            mu = re.search(r'up\s+(.*?)(?:,?\s*load average)', out, re.I)
+            if mu and uptime_s is None:
+                uptime_s = _uptime_to_seconds(mu.group(1).strip().rstrip(','))
+    except Exception:
+        pass
+    return load, uptime_s
+
+
 def _host_stats() -> dict:
     import subprocess
 
@@ -1610,17 +1666,10 @@ def _host_stats() -> dict:
     except Exception:
         disk.update({"total": None, "free": None, "used": None})
 
-    # CPU load + phone uptime.
-    load: Optional[List[float]] = None
-    try:
-        load = [round(float(x), 2) for x in open("/proc/loadavg").read().split()[:3]]
-    except Exception:
-        pass
-    uptime_s: Optional[float] = None
-    try:
-        uptime_s = round(float(open("/proc/uptime").read().split()[0]), 1)
-    except Exception:
-        pass
+    # CPU load + phone uptime. Prefer /proc (Linux/VPS); on Android the app
+    # user is denied /proc/loadavg + /proc/uptime, so _load_and_uptime() falls
+    # back to the `uptime` binary, which can still read them.
+    load, uptime_s = _load_and_uptime()
 
     battery = _termux(["termux-battery-status"])
     wifi = _termux(["termux-wifi-connectioninfo"])
@@ -1635,8 +1684,8 @@ def _host_stats() -> dict:
         "note": ("Battery % + Wi-Fi come from Termux:API "
                  "(termux-battery-status / termux-wifi-connectioninfo); they appear once "
                  "the Termux:API app is installed with its permissions granted. "
-                 "load1/load5/load15 and uptime are null: Android's SELinux denies the "
-                 "app user read access to /proc/loadavg and /proc/uptime."),
+                 "Load average + uptime are read from /proc on Linux and via the `uptime` "
+                 "binary on Android (where /proc/loadavg + /proc/uptime are SELinux-restricted)."),
     }
 
 
