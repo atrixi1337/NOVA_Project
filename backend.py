@@ -479,7 +479,9 @@ PROVIDERS = {
     "nova": {"label": "Amazon Nova", "base_url": NOVA_BASE_URL, "default_model": DEFAULT_MODEL, "models": AVAILABLE_MODELS},
     "cohere": {"label": "Cohere", "base_url": COHERE_BASE_URL, "default_model": COHERE_DEFAULT_MODEL, "models": COHERE_MODELS},
     "ollama": {"label": "Local Ollama (uncensored)", "base_url": OLLAMA_BASE_URL, "default_model": OLLAMA_DEFAULT_MODEL, "models": OLLAMA_MODELS},
-    "openrouter": {"label": "OpenRouter (free, cloud)", "base_url": OPENROUTER_BASE_URL, "default_model": OPENROUTER_DEFAULT_MODEL, "models": OPENROUTER_MODELS, "cloud": True},
+    # OpenRouter disabled for now — re-enable by uncommenting this line and
+    # setting OPENROUTER_API_KEY. (env vars + the _provider_key branch are kept.)
+    # "openrouter": {"label": "OpenRouter (free, cloud)", "base_url": OPENROUTER_BASE_URL, "default_model": OPENROUTER_DEFAULT_MODEL, "models": OPENROUTER_MODELS, "cloud": True},
     "hfrouter": {"label": "HuggingFace Router (free, cloud)", "base_url": HFROUTER_BASE_URL, "default_model": HFROUTER_DEFAULT_MODEL, "models": HFROUTER_MODELS, "cloud": True},
     "requesty": {"label": "Requesty (free, cloud)", "base_url": REQUESTY_BASE_URL, "default_model": REQUESTY_DEFAULT_MODEL, "models": REQUESTY_MODELS, "cloud": True},
     "cloudflare": {"label": "Cloudflare Workers AI (free, cloud)", "base_url": CLOUDFLARE_BASE_URL, "default_model": CLOUDFLARE_DEFAULT_MODEL, "models": CLOUDFLARE_MODELS, "cloud": True},
