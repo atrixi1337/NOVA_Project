@@ -644,3 +644,32 @@ def test_attach_rejects_oversize(client, monkeypatch):
     from io import BytesIO
     r = client.post("/api/attach", files={"file": ("big.txt", BytesIO(b"x" * 1024), "text/plain")})
     assert r.status_code == 413
+
+
+# ---------------------------------------------------------------------------
+# Infron (ONE router) provider wiring
+# ---------------------------------------------------------------------------
+def test_infron_provider_wiring(client):
+    """infron is exposed in the model catalog + health, resolves through the
+    gateway model parser, and 400s cleanly when its key is unconfigured."""
+    models = client.get("/api/models").json()
+    prov = models["providers"]["infron"]
+    assert prov["label"] == "Infron (ONE router)"
+    assert prov["models"] == ["qwen/qwen3.8-27b:free"]
+    assert prov["default"] == "qwen/qwen3.8-27b:free"
+
+    # /api/health also surfaces the provider namespace
+    assert "infron" in client.get("/api/health").json()["providers"]
+
+    # gateway "provider/model" parsing resolves the new namespace
+    assert backend._parse_gateway_model("infron/qwen/qwen3.8-27b:free") == ("infron", "qwen/qwen3.8-27b:free")
+    # bare model (no provider/) resolves on the default provider, not infrar
+    assert backend._parse_gateway_model("qwen/qwen3.8-27b:free")[0] == backend.DEFAULT_PROVIDER
+
+    # without INFRON_API_KEY configured, /api/chat 400s with a key error
+    r = client.post("/api/chat", json={
+        "provider": "infron", "model": "qwen/qwen3.8-27b:free",
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert r.status_code == 400
+    assert "Infron" in r.json()["detail"]

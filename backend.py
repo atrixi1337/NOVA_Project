@@ -333,6 +333,21 @@ IFM_MODELS = [
     if m.strip()
 ]
 
+# ---- provider: Infron (ONE router; bearer-auth, open-model router) -------------
+# https://llm.onerouter.pro  — an OpenAI-compatible router fronting open models
+# (e.g. qwen/qwen3.8-27b:free). Standard Authorization: Bearer header (handled
+# by nova_headers' default branch); same /chat/completions path as the others.
+# Enable by putting INFRON_API_KEY=<your key> in the deployment .env.
+INFRON_BASE_URL = os.getenv("INFRON_BASE_URL", "https://llm.onerouter.pro/v1")
+INFRON_API_KEY = os.getenv("INFRON_API_KEY", "")
+INFRON_DEFAULT_MODEL = os.getenv("INFRON_MODEL", "qwen/qwen3.8-27b:free")
+INFRON_MODELS = [
+    m.strip() for m in os.getenv(
+        "INFRON_MODELS",
+        "qwen/qwen3.8-27b:free",
+    ).split(",") if m.strip()
+]
+
 # ---- provider: Cloudflare Workers AI (OpenAI-compatible; free 10k neurons/day) ----
 # Censored (cloud). Needs CLOUDFLARE_ACCOUNT_ID (in the base URL) + an API token
 # with Workers AI permission. Free tier = 10,000 Neurons/day (resets 00:00 UTC).
@@ -500,6 +515,7 @@ PROVIDERS = {
     "nvidia": {"label": "NVIDIA NIM", "base_url": NVIM_BASE_URL, "default_model": NVIM_DEFAULT_MODEL, "models": NVIM_MODELS, "cloud": True},
     "agnes": {"label": "Agnes AI", "base_url": AGNES_BASE_URL, "default_model": AGNES_DEFAULT_MODEL, "models": AGNES_MODELS, "cloud": True},
     "ifm": {"label": "IFM AI (K2 Horizon)", "base_url": IFM_BASE_URL, "default_model": IFM_DEFAULT_MODEL, "models": IFM_MODELS, "cloud": True},
+    "infron": {"label": "Infron (ONE router)", "base_url": INFRON_BASE_URL, "default_model": INFRON_DEFAULT_MODEL, "models": INFRON_MODELS, "cloud": True},
 }
 
 # ----------------------------------------------------------------------------
@@ -1988,6 +2004,8 @@ def _provider_key(provider: str) -> str:
         return AGNES_API_KEY
     if provider == "ifm":
         return IFM_API_KEY
+    if provider == "infron":
+        return INFRON_API_KEY
     if provider == "upstage":
         return UPSTAGE_API_KEY
     if provider == "reka":
