@@ -45,7 +45,7 @@ const SECURITY_QUICK_PROMPTS = [
 ]
 
 // Tab ids (order matters for the tab bar).
-const TABS = ['chat', 'arena', 'gateway', 'analyzer', 'usage']
+const TABS = ['chat', 'arena', 'gateway', 'analyzer', 'usage', 'host']
 
 // NovaSec persona prompt also lives in personas.js.
 
@@ -145,6 +145,16 @@ export default function App() {
   const [health, setHealth] = useState(null)
   const [host, setHost] = useState(null)
 
+  // F2: light/dark theme toggle (persisted as nova_theme; applied to <html>).
+  const [theme, setThemeState] = useState(() => {
+    try { return localStorage.getItem('nova_theme') || 'dark' } catch { return 'dark' }
+  })
+  const toggleTheme = () => setThemeState((t) => (t === 'dark' ? 'light' : 'dark'))
+
+  // F8/F4: custom personas + the per-chat persona override.
+  const [customPersonas, setCustomPersonas] = useState([])
+  const [selectedPersona, setSelectedPersona] = useState(null)
+
   // Shared-passphrase auth: the API 401s until this browser logs in once.
   const [locked, setLocked] = useState(false)
   const [authBusy, setAuthBusy] = useState(false)
@@ -180,6 +190,14 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('nova_web_search', String(webSearch)) } catch {}
   }, [webSearch])
+  useEffect(() => {
+    try { localStorage.setItem('nova_theme', theme) } catch {}
+    document.documentElement.setAttribute('data-theme', theme)
+  }, [theme])
+  // F8: load persisted custom personas once on mount.
+  useEffect(() => {
+    api.personas().then((r) => setCustomPersonas(r.personas || [])).catch(() => {})
+  }, [])
 
   // Keep the browser tab title in sync with the open conversation.
   useEffect(() => {
@@ -300,7 +318,7 @@ export default function App() {
   const startNewChat = useCallback(async () => {
     if (busy) return
     try {
-      const conv = await api.newConversation({ provider: activeProvider, model: activeModel || 'auto' })
+      const conv = await api.newConversation({ provider: activeProvider, model: activeModel || 'auto', persona: selectedPersona?.id })
       setCurrentId(conv.id)
       setMessages([])
       setInput('')
@@ -325,6 +343,10 @@ export default function App() {
       pendingRegenRef.current = false
       if (conv.provider && providers[conv.provider]) setProvider(conv.provider)
       if (conv.model) setModel(conv.model)
+      // F4: restore the per-chat custom persona override.
+      setSelectedPersona(
+        conv.persona_id ? (customPersonas.find((p) => p.id === conv.persona_id) || null) : null
+      )
     } catch (e) {
       setErr(e.message)
     } finally {
@@ -356,6 +378,52 @@ export default function App() {
     }
   }
 
+  // F3: pin / unpin a conversation without leaving the list.
+  const togglePin = async (cid, cur) => {
+    try {
+      await api.updateConversationMeta(cid, { pinned: !cur })
+      setConversations((cs) => cs.map((c) => c.id === cid ? { ...c, pinned: !cur } : c))
+    } catch (e) { setErr(e.message) }
+  }
+  // F3: archive / unarchive. Archiving hides it from the default list (the
+  // backend ?archived=0 filter); unarchiving reloads so it reappears.
+  const toggleArchive = async (cid, cur) => {
+    try {
+      await api.updateConversationMeta(cid, { archived: !cur })
+      if (!cur) setConversations((cs) => cs.filter((c) => c.id !== cid))
+      else loadConversations()
+    } catch (e) { setErr(e.message) }
+  }
+  // F6: download a conversation as Markdown or JSON.
+  const exportConversation = async (cid, fmt = 'md') => {
+    try {
+      const out = await api.exportConversation(cid, fmt)
+      if (typeof out === 'string') {
+        const blob = new Blob([out], { type: fmt === 'json' ? 'application/json' : 'text/markdown' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `nova-${cid}.${fmt === 'json' ? 'json' : 'md'}`
+        a.click()
+        URL.revokeObjectURL(url)
+      }
+    } catch (e) { setErr(e.message) }
+  }
+
+  // F10: doc-as-context. Extracts text from an uploaded doc/pdf/csv/… and
+  // appends it to the input as reviewable context before sending.
+  const docInputRef = useRef(null)
+  const onAttachDoc = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const res = await api.attach(file, 8000)
+      const block = `[Attached ${file.name}]\n${res.content}${res.truncated ? '\n…(truncated)' : ''}`
+      setInput((cur) => (cur ? cur + '\n\n' : '') + block)
+    } catch (e2) { setErr(e2.message) }
+  }
+
   // ── chat ──
   // Throttled live flush: streaming deltas and reasoning arrive faster than we
   // want to re-render markdown, so buffer and paint at most every ~80ms.
@@ -380,7 +448,14 @@ export default function App() {
     // Personas compose as a per-request system message (Malayalam takes
     // precedence and routes to Gemini); the backend forwards them verbatim.
     const payload = {
-      messages: composePersonaMessages(baseMessages, { malayalamMode, securityMode }),
+      // F8/F4: a custom persona's system prompt is prepended unless Malayalam /
+      // NovaSec already own the system role (they take precedence).
+      messages: [
+        ...((selectedPersona && !malayalamMode && !securityMode && selectedPersona.system_prompt)
+          ? [{ role: 'system', content: selectedPersona.system_prompt }]
+          : []),
+        ...composePersonaMessages(baseMessages, { malayalamMode, securityMode }),
+      ],
       model: activeModel,
       agent: useAgent,
       provider: activeProvider,
@@ -399,6 +474,8 @@ export default function App() {
         reasoning: ev.reasoning,
         trace: ev.trace || [],
         usage: ev.usage,
+        cost_usd: ev.cost_usd,
+        citations: ev.citations || [],
       })
       setConversations((cs) => cs.map((c) =>
         c.id === cid ? { ...c, preview: ev.content || '', title: ev.title || c.title } : c
@@ -484,7 +561,7 @@ export default function App() {
       const ctl = new AbortController()
       abortRef.current = ctl
       const data = await api.chat(payload, ctl.signal)
-      setMessages([...baseMessages, { role: 'assistant', content: data.content, reasoning: data.reasoning }])
+      setMessages([...baseMessages, { role: 'assistant', content: data.content, reasoning: data.reasoning, citations: data.citations }])
       finalizeMeta(data)
       setLastMeta((m) => ({ ...m, trace: data.trace || [] }))
     } catch (e) {
@@ -513,7 +590,7 @@ export default function App() {
     let cid = currentId
     if (!cid) {
       try {
-        const conv = await api.newConversation({ provider: activeProvider, model: activeModel || 'auto' })
+        const conv = await api.newConversation({ provider: activeProvider, model: activeModel || 'auto', persona: selectedPersona?.id })
         cid = conv.id
         setCurrentId(cid)
         setConversations((cs) => [conv, ...cs])
@@ -606,6 +683,9 @@ export default function App() {
   const fmtTok = (n) => (typeof n === 'number'
     ? (n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : n.toLocaleString())
     : '—')
+  // F1 cost estimate: tiny amounts need 4 decimals, bigger ones 2.
+  const fmtCost = (n) => (typeof n === 'number'
+    ? (n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`) : '—')
 
   const paletteItems = useMemo(() => {
     const items = []
@@ -667,6 +747,9 @@ export default function App() {
         onSelect={openConversation}
         onRename={renameConversation}
         onDelete={deleteConversation}
+        onTogglePin={togglePin}
+        onToggleArchive={toggleArchive}
+        onExport={exportConversation}
         onSettings={() => setShowSettings(true)}
         loading={{ new: busy }}
         open={sidebarOpen}
@@ -687,6 +770,8 @@ export default function App() {
           onSwitchProvider={switchProvider}
           health={health}
           host={host}
+          theme={theme}
+          onTheme={toggleTheme}
         />
 
         {/* Tabs (shrink-0: a tall tab body must never squash the bar to zero) */}
@@ -861,6 +946,13 @@ export default function App() {
                     onChange={onAttachFiles}
                     className="hidden"
                   />
+                  <input
+                    type="file"
+                    accept=".txt,.pdf,.csv,.json,.log,.md,.text"
+                    ref={docInputRef}
+                    onChange={onAttachDoc}
+                    className="hidden"
+                  />
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
@@ -869,6 +961,15 @@ export default function App() {
                     title="Attach image"
                   >
                     <AttachmentPaperclip className="w-5 h-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => docInputRef.current?.click()}
+                    disabled={busy}
+                    className="absolute left-9 bottom-2.5 p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors z-10"
+                    title="Attach document as context (txt/pdf/csv/json/log/md)"
+                  >
+                    <span className="w-5 h-5 flex items-center justify-center text-[15px]">📄</span>
                   </button>
                   <textarea
                     ref={textareaRef}
@@ -921,6 +1022,14 @@ export default function App() {
                     <span>{lastMeta.provider}</span>
                     <span>·</span>
                     <span>{lastMeta.model}</span>
+                    {lastMeta.cost_usd != null && (
+                      <>
+                        <span>·</span>
+                        <span title={`Cost: $${Number(lastMeta.cost_usd).toFixed(4)}`}>
+                          {fmtCost(lastMeta.cost_usd)}
+                        </span>
+                      </>
+                    )}
                     {lastMeta.usage?.total_tokens != null && (
                       <>
                         <span>·</span>
@@ -992,6 +1101,12 @@ export default function App() {
         setMalayalamMode={setMalayalamMode}
         securityMode={securityMode}
         setSecurityMode={setSecurityMode}
+        theme={theme}
+        onTheme={toggleTheme}
+        customPersonas={customPersonas}
+        selectedPersona={selectedPersona}
+        onSelectPersona={setSelectedPersona}
+        onRefreshPersonas={() => api.personas().then((r) => setCustomPersonas(r.personas || [])).catch(() => {})}
       />
     </div>
   )

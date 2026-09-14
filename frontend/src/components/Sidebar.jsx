@@ -52,6 +52,9 @@ export default function Sidebar({
   onSelect,
   onRename,
   onDelete,
+  onTogglePin,
+  onToggleArchive,
+  onExport,
   onSettings,
   loading,
   open = false,
@@ -284,10 +287,25 @@ export default function Sidebar({
                                 style={{ background: `hsl(${providerHue(c.provider)} 45% 55%)` }}
                                 title={c.provider || 'unknown provider'}
                               />
+                              {c.pinned && <span className="text-accent2" title="Pinned">★</span>}
                               <span className="font-medium text-[13px] text-text truncate">
                                 {c.title}
                               </span>
                             </div>
+                            {c.folder ? (
+                              <span className="inline-block px-1.5 py-0.25 mt-0.5 text-[9px] text-accent2 bg-accent2/10 border border-accent2/20 rounded-full truncate">
+                                {c.folder}
+                              </span>
+                            ) : null}
+                            {c.tags && c.tags.length > 0 ? (
+                              <div className="flex flex-wrap gap-1 mt-0.5">
+                                {c.tags.map((t) => (
+                                  <span key={t} className="px-1.5 py-0.25 text-[9px] text-muted/80 bg-panel border border-border rounded-full">
+                                    {t}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
                             {c.preview ? (
                               <div className="text-[12px] text-muted truncate mt-0.5 mb-1 pl-3">
                                 {truncate(c.preview, 48)}
@@ -304,6 +322,27 @@ export default function Sidebar({
                       {/* hover actions (only for non-active, non-renaming) */}
                       {!isRenaming && (
                         <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity bg-panel2/80 rounded-lg">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onTogglePin?.(c.id, c.pinned) }}
+                            className="p-1 rounded-md text-muted hover:text-accent hover:bg-panel transition-colors"
+                            title={c.pinned ? 'Unpin' : 'Pin'}
+                          >
+                            <span className="w-4 h-4 flex items-center justify-center text-[13px]">{c.pinned ? '📌' : '📍'}</span>
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onToggleArchive?.(c.id, c.archived) }}
+                            className="p-1 rounded-md text-muted hover:text-err hover:bg-panel transition-colors"
+                            title={c.archived ? 'Unarchive' : 'Archive'}
+                          >
+                            <span className="w-4 h-4 flex items-center justify-center text-[13px]">{c.archived ? '📤' : '🗄️'}</span>
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onExport?.(c.id, 'md') }}
+                            className="p-1 rounded-md text-muted hover:text-text hover:bg-panel transition-colors"
+                            title="Export as Markdown"
+                          >
+                            <span className="w-4 h-4 flex items-center justify-center text-[13px]">⬇️</span>
+                          </button>
                           <button
                             onClick={() => startRename(c.id, c.title)}
                             className="p-1 rounded-md text-muted hover:text-text hover:bg-panel transition-colors"

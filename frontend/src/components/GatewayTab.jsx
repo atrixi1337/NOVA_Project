@@ -48,6 +48,10 @@ export default function GatewayTab({ health }) {
   const [newKey, setNewKey] = useState(null)
   const [err, setErr] = useState('')
   const [confirmRevoke, setConfirmRevoke] = useState(null)
+  // F5: per-key scope / quota / rate-limit overrides.
+  const [scope, setScope] = useState('')
+  const [quotaTokens, setQuotaTokens] = useState('')
+  const [rateLimit, setRateLimit] = useState('')
   // Advertised base URL: the configured NOVA_PUBLIC_URL when set (so snippets
   // always carry the public domain), otherwise the address you're browsing from.
   const origin = publicBase || window.location.origin
@@ -80,9 +84,14 @@ export default function GatewayTab({ health }) {
     if (!name.trim() || busy) return
     setBusy(true); setErr(''); setNewKey(null)
     try {
-      const res = await api.createGatewayKey(name.trim())
+      const extra = {}
+      if (scope.trim()) extra.scope = scope.trim()
+      if (quotaTokens.trim()) extra.daily_quota_tokens = Number(quotaTokens)
+      if (rateLimit.trim()) extra.rate_limit_per_min = Number(rateLimit)
+      const res = await api.createGatewayKey(name.trim(), extra)
       setNewKey(res)
       setName('')
+      setScope(''); setQuotaTokens(''); setRateLimit('')
       await load()
     } catch (e) { setErr(e.message) } finally { setBusy(false) }
   }
@@ -214,6 +223,37 @@ export default function GatewayTab({ health }) {
           >
             {busy ? '…' : 'Mint key'}
           </button>
+        </div>
+        <div className="flex flex-col gap-2.5 pt-1">
+          <div className="flex items-center gap-2 text-[12px]">
+            <label className="w-40 text-muted">Scope / allowed models</label>
+            <input
+              value={scope}
+              onChange={(e) => setScope(e.target.value)}
+              placeholder='blank = all models'
+              className="flex-1 bg-black text-text px-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2 placeholder:text-muted/40"
+            />
+          </div>
+          <div className="flex items-center gap-2 text-[12px]">
+            <label className="w-40 text-muted">Daily token budget</label>
+            <input
+              value={quotaTokens}
+              onChange={(e) => setQuotaTokens(e.target.value)}
+              type="number" min="1"
+              placeholder="blank = no daily cap"
+              className="flex-1 bg-black text-text px-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2"
+            />
+          </div>
+          <div className="flex items-center gap-2 text-[12px]">
+            <label className="w-40 text-muted">Rate limit (req/min)</label>
+            <input
+              value={rateLimit}
+              onChange={(e) => setRateLimit(e.target.value)}
+              type="number" min="1"
+              placeholder="blank = server default"
+              className="flex-1 bg-black text-text px-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2"
+            />
+          </div>
         </div>
         {newKey && (
           <div className="rounded-lg border border-accent/40 bg-accent/5 p-3 space-y-2">

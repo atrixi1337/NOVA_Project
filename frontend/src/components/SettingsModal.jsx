@@ -45,6 +45,12 @@ export default function SettingsModal({
   setMalayalamMode,
   securityMode = false,
   setSecurityMode,
+  theme = 'dark',
+  onTheme,
+  customPersonas = [],
+  selectedPersona = null,
+  onSelectPersona,
+  onRefreshPersonas,
 }) {
   const [keys, setKeys] = useState({})
   const [saving, setSaving] = useState(false)
@@ -53,6 +59,12 @@ export default function SettingsModal({
   const [imgGenBusy, setImgGenBusy] = useState(false)
   const [imgGenError, setImgGenError] = useState('')
   const [imgGenResult, setImgGenResult] = useState(null)
+  // F8: persona manager form state.
+  const [newPersonaName, setNewPersonaName] = useState('')
+  const [newPersonaPrompt, setNewPersonaPrompt] = useState('')
+  const [personaErr, setPersonaErr] = useState('')
+
+  const truncate = (text, n) => (text ? (text.replace(/\n+/g, ' ').trim().slice(0, n)) : '')
 
   useEffect(() => {
     if (open) setKeys(loadKeys())
@@ -278,6 +290,86 @@ export default function SettingsModal({
                   <span className={`inline-block h-4 w-4 transform rounded-full bg-panel2 transition-colors ${securityMode ? 'translate-x-5' : 'translate-x-1'}`} />
                 </span>
               </label>
+            </div>
+          </div>
+
+          {/* ── App Theme (F2) ── */}
+          <div className="space-y-3">
+            <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">Theme</h4>
+            <div className="flex items-center justify-between">
+              <span className="text-[13px] text-text">{theme === 'dark' ? 'Dark' : 'Light'} mode</span>
+              <label className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors">
+                <input type="checkbox" checked={theme === 'light'} onChange={() => onTheme?.()} className="sr-only" />
+                <span className={`inline-block h-5 w-9 rounded-full transition-colors ${theme === 'light' ? 'bg-accent2' : 'bg-border'}`}>
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-panel2 transition-transform ${theme === 'light' ? 'translate-x-5' : 'translate-x-1'}`} />
+                </span>
+              </label>
+            </div>
+            <p className="text-[11px] text-muted/60">Toggle the "night at the SOC" dark theme, or a warm light variant.</p>
+            {personaErr && <span className="text-[11px] text-err">{personaErr}</span>}
+          </div>
+
+          {/* ── Custom Personas (F8) ── */}
+          <div className="space-y-3">
+            <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">Custom Personas</h4>
+            <p className="text-[11px] text-muted/60">Named system prompts you can pin to a conversation. Select one to apply it to new chats.</p>
+            <div className="flex flex-col gap-2">
+              {customPersonas && customPersonas.length === 0 ? (
+                <span className="text-[12px] text-muted">No custom personas yet.</span>
+              ) : (
+                customPersonas.map((p) => (
+                  <div key={p.id} className="flex items-center justify-between gap-2 p-2 bg-panel rounded-lg border border-border">
+                    <div className="min-w-0">
+                      <div className="text-[13px] text-text font-medium truncate">{p.name || 'unnamed'}</div>
+                      {p.system_prompt ? <div className="text-[10px] text-muted/60 truncate">{truncate(p.system_prompt, 80)}</div> : null}
+                      {selectedPersona?.id === p.id && <span className="text-[10px] text-accent2">applied</span>}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => { onSelectPersona?.(p); onRefreshPersonas?.() }}
+                        title="Apply to new chats"
+                        className="p-1 rounded-md text-accent2 hover:text-text hover:bg-panel transition-colors"
+                      >✓</button>
+                      <button
+                        onClick={async () => {
+                          setPersonaErr('')
+                          try { await api.deletePersona(p.id); onRefreshPersonas?.() } catch (e) { setPersonaErr(e.message) }
+                        }}
+                        title="Delete persona"
+                        className="p-1 rounded-md text-err hover:text-text hover:bg-panel transition-colors"
+                      >🗑</button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="space-y-2 pt-2 border-t border-border">
+              <input
+                value={newPersonaName}
+                onChange={(e) => setNewPersonaName(e.target.value)}
+                placeholder="Persona name"
+                className="w-full text-[13px] px-3 py-1.5 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 placeholder:text-muted/40"
+              />
+              <textarea
+                value={newPersonaPrompt}
+                onChange={(e) => setNewPersonaPrompt(e.target.value)}
+                placeholder="System prompt…"
+                rows={3}
+                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 placeholder:text-muted/40 resize-none"
+              />
+              <button
+                onClick={async () => {
+                  if (!newPersonaName.trim() || !newPersonaPrompt.trim()) return
+                  setPersonaErr('')
+                  try {
+                    await api.createPersona({ name: newPersonaName.trim(), system_prompt: newPersonaPrompt })
+                    setNewPersonaName(''); setNewPersonaPrompt('')
+                    onRefreshPersonas?.()
+                  } catch (e) { setPersonaErr(e.message) }
+                }}
+                disabled={!newPersonaName.trim() || !newPersonaPrompt.trim()}
+                className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-accent text-[#1a1000] font-semibold hover:brightness-90 disabled:opacity-40 transition-all"
+              >Create persona</button>
             </div>
           </div>
 

@@ -108,7 +108,7 @@ function HealthDot({ health, host }) {
 // blinking indicator, a backend health dot, a provider quick-switch dropdown,
 // and a small-caps model read-out. Desktop also gets a live clock; on phones
 // the bar stays lean (no logo/clock) so nothing overlaps or clips.
-export default function Header({ onSettings, onMenu, providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health, host }) {
+export default function Header({ onSettings, onMenu, providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health, host, theme = 'dark', onTheme }) {
   const hasProviders = onSwitchProvider && Object.keys(providers).length > 0
   return (
     <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 bg-panel border-b border-border">
@@ -132,6 +132,15 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <HealthDot health={health} host={host} />
         <span className="hidden sm:inline"><Clock /></span>
+        {onTheme && (
+          <button
+            onClick={onTheme}
+            className="p-1.5 -mr-1 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
+            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          >
+            <span className="w-5 h-5 flex items-center justify-center text-[15px]">{theme === 'dark' ? '🌙' : '☀️'}</span>
+          </button>
+        )}
         {hasProviders ? (
           <select
             value={activeProvider || ''}

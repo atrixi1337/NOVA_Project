@@ -41,6 +41,16 @@ async function jput(path, body) {
   return r.json()
 }
 
+async function jpatch(path, body) {
+  const r = await fetch(BASE + path, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  })
+  if (!r.ok) throw await toError(r, `PATCH ${path} -> ${r.status}`)
+  return r.json()
+}
+
 async function jdel(path) {
   const r = await fetch(BASE + path, { method: 'DELETE' })
   if (!r.ok) throw await toError(r, `DELETE ${path} -> ${r.status}`)
@@ -144,8 +154,34 @@ export const api = {
 
   // inference gateway keys (OpenAI-compatible /v1 access)
   gatewayKeys: () => jget('/api/gateway/keys'),
-  createGatewayKey: (name) => jpost('/api/gateway/keys', { name }),
+  createGatewayKey: (name, extra = {}) => jpost('/api/gateway/keys', { name, ...extra }),
   revokeGatewayKey: (prefix) => jdel(`/api/gateway/keys/${prefix}`),
+
+  // conversation metadata (F3 folders/tags/pinned/archived + F4 persona)
+  updateConversationMeta: (cid, patch) => jpatch(`/api/conversations/${cid}/meta`, patch),
+
+  // conversation export (F6 markdown/json)
+  exportConversation: async (cid, fmt = 'md') => {
+    const r = await fetch(`${BASE}/api/conversations/${cid}/export?fmt=${fmt}`)
+    if (!r.ok) throw await toError(r, `export -> ${r.status}`)
+    return fmt === 'json' ? r.json() : r.text()
+  },
+
+  // custom personas (F8): persisted named system prompts
+  personas: () => jget('/api/personas'),
+  createPersona: (body) => jpost('/api/personas', body),
+  updatePersona: (id, body) => jpatch(`/api/personas/${id}`, body),
+  deletePersona: (id) => jdel(`/api/personas/${id}`),
+
+  // attach a document as conversation context (F10)
+  attach: async (file, maxChars = 8000) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('max_chars', String(maxChars))
+    const r = await fetch(BASE + '/api/attach', { method: 'POST', body: fd })
+    if (!r.ok) throw await toError(r, `attach -> ${r.status}`)
+    return r.json()
+  },
 
   // multipart analyze
   analyze: async (file, { mode, model, provider, reasoning_effort, api_key }) => {

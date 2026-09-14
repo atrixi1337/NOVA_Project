@@ -26,7 +26,21 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
-  if (url.pathname.startsWith('/api/')) return;
+  if (url.pathname.startsWith('/api/')) {
+    // F11: offline conversation reads — network-first, fall back to the cache
+    // so a previously opened thread still renders when the device is offline.
+    if (url.pathname.startsWith('/api/conversations/')) {
+      e.respondWith(
+        fetch(req).then((r) => {
+          const cp = r.clone();
+          caches.open(CACHE).then((c) => c.put(req, cp));
+          return r;
+        }).catch(() => caches.match(req))
+      );
+      return;
+    }
+    return; // all other /api/* stays live
+  }
 
   if (req.mode === 'navigate' || url.pathname === '/') {
     e.respondWith(

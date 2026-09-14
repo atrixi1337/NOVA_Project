@@ -197,6 +197,24 @@ export default function Message({ msg, streaming = false, onEdit, onRegenerate }
             ) : (
               <div className="text-muted italic">…thinking</div>
             )}
+            {/* F7: web-search / fetch sources surfaced by the backend as citations */}
+            {!isUser && msg.citations && msg.citations.length > 0 && (
+              <div className="mt-3 pt-2 border-t border-border">
+                <div className="text-[10px] uppercase tracking-wider text-muted/70 small-caps mb-1.5">Sources</div>
+                <ul className="space-y-1">
+                  {msg.citations.map((c, i) => (
+                    <li key={i} className="text-[12px]">
+                      <a
+                        href={c.url} target="_blank" rel="noopener noreferrer"
+                        className="text-accent2 hover:text-accent truncate block"
+                        title={c.url}
+                      >{c.title || c.url}</a>
+                      {c.snippet ? <div className="text-[11px] text-muted/70 mt-0.5">{c.snippet}</div> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         </div>
       </div>

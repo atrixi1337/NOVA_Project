@@ -69,6 +69,44 @@
   src: url('/fonts/cormorant-italic-500.woff2') format('woff2');
 }
 
+:root {
+  /* Dark "night at the SOC" palette (RGB form so /<alpha> modifiers still work).
+     Mapped 1:1 to the Tailwind `colors` in tailwind.config.js. */
+  --color-bg: 11 10 9;
+  --color-panel: 18 16 14;
+  --color-panel2: 26 25 21;
+  --color-border: 36 34 29;
+  --color-border2: 46 44 39;
+  --color-text: 214 208 194;
+  --color-text2: 239 233 218;
+  --color-muted: 130 125 112;
+  --color-faint: 58 55 47;
+  --color-sidebar: 18 16 14;
+  --color-accent: 201 162 39;
+  --color-accent2: 138 115 32;
+  --color-user: 18 16 14;
+  --color-err: 150 64 47;
+  --color-ok: 63 208 122;
+}
+/* F2 light theme — applied by toggling `data-theme` (persisted as nova_theme). */
+[data-theme="light"] {
+  --color-bg: 248 245 240;
+  --color-panel: 240 236 227;
+  --color-panel2: 230 225 214;
+  --color-border: 214 208 194;
+  --color-border2: 194 188 176;
+  --color-text: 42 37 31;
+  --color-text2: 26 25 21;
+  --color-muted: 107 102 85;
+  --color-faint: 224 216 200;
+  --color-sidebar: 240 236 227;
+  --color-accent: 184 134 11;
+  --color-accent2: 138 115 32;
+  --color-user: 240 236 227;
+  --color-err: 150 64 47;
+  --color-ok: 63 208 122;
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;
@@ -76,18 +114,18 @@ html, body, #root {
 }
 
 body {
-  background: #0b0a09;
-  color: #d6d0c2;
+  background: rgb(var(--color-bg));
+  color: rgb(var(--color-text));
 }
 
 /* Global */
 * {
-  border-color: #24221d;
+  border-color: rgb(var(--color-border));
 }
 
 /* thin scrollbars */
 *::-webkit-scrollbar { width: 6px; height: 6px; }
-*::-webkit-scrollbar-thumb { background: #2e2c27; border-radius: 4px; }
+*::-webkit-scrollbar-thumb { background: rgb(var(--color-border2)); border-radius: 4px; }
 *::-webkit-scrollbar-track { background: transparent; }
 
 /* Smooth transitions */
@@ -99,11 +137,11 @@ button, select, input, textarea {
 button:not(:disabled):active { transform: scale(0.98); }
 
 /* amber selection (melancholic touch) */
-::selection { background: #c9a227; color: #0b0a09; }
+::selection { background: rgb(var(--color-accent)); color: rgb(var(--color-bg)); }
 
 /* Keyboard focus: amber ring for keyboard navigation only. */
 :focus-visible {
-  outline: 2px solid rgba(201, 162, 39, 0.55);
+  outline: 2px solid rgb(var(--color-accent) / 0.55);
   outline-offset: 2px;
   border-radius: 4px;
 }

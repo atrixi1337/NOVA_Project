@@ -378,3 +378,269 @@ def test_conversation_crud(fake_provider, client):
     assert client.get(f"/api/conversations/{cid}").json()["title"] == "renamed"
     assert client.delete(f"/api/conversations/{cid}").status_code == 200
     assert client.get(f"/api/conversations/{cid}").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# F1 cost estimate
+# ---------------------------------------------------------------------------
+
+def test_cost_usd_pricing():
+    assert backend._cost_usd("nova", "nova-2-lite-v1", {"prompt_tokens": 100, "completion_tokens": 50}) == 0.018
+    assert backend._cost_usd("ollama", "dolphin3.0:8b", {"prompt_tokens": 100, "completion_tokens": 50}) is None
+    assert backend._cost_usd("nova", "nova-2-lite-v1", None) is None
+
+
+# ---------------------------------------------------------------------------
+# F3 folders / tags / pinned / archived  +  F4 per-chat persona override
+# ---------------------------------------------------------------------------
+
+def test_conversation_meta_folder_tags_persona(client):
+    r = client.post("/api/conversations", json={
+        "provider": "openai", "model": "gpt-4o",
+        "folder": "research", "tags": ["a", "b"], "persona": "pers_abc",
+    })
+    assert r.status_code == 200
+    conv = r.json()
+    cid = conv["id"]
+    assert conv["folder"] == "research"
+    assert conv["tags"] == ["a", "b"]
+    assert conv["persona_id"] == "pers_abc"
+    assert conv["pinned"] is False and conv["archived"] is False
+
+    got = client.get(f"/api/conversations/{cid}").json()
+    assert got["folder"] == "research"
+    assert got["tags"] == ["a", "b"]
+    assert got["persona_id"] == "pers_abc"
+    assert got["archived"] is False
+
+    mine = [c for c in client.get("/api/conversations").json()["conversations"] if c["id"] == cid][0]
+    assert mine["folder"] == "research" and mine["tags"] == ["a", "b"]
+    assert mine["persona_id"] == "pers_abc"
+
+
+def test_conversation_patch_meta_and_archive_filter(client):
+    cid = client.post("/api/conversations", json={}).json()["id"]
+    assert client.patch(f"/api/conversations/{cid}/meta", json={
+        "pinned": True, "archived": True, "folder": "done", "tags": ["x"]
+    }).status_code == 200
+    got = client.get(f"/api/conversations/{cid}").json()
+    assert got["pinned"] is True and got["archived"] is True
+    assert got["folder"] == "done" and got["tags"] == ["x"]
+
+    # archived conversations are hidden from the default list ...
+    assert not any(c["id"] == cid for c in client.get("/api/conversations").json()["conversations"])
+    # ... but present with ?archived=1
+    assert any(c["id"] == cid for c in client.get("/api/conversations?archived=1").json()["conversations"])
+
+    assert client.patch("/api/conversations/conv_doesnotexist/meta", json={"pinned": True}).status_code == 404
+
+
+def test_conversation_tags_json_roundtrip(client):
+    cid = client.post("/api/conversations", json={"tags": [], "folder": ""}).json()["id"]
+    # empty tags parse to []
+    assert client.get(f"/api/conversations/{cid}").json()["tags"] == []
+    client.patch(f"/api/conversations/{cid}/meta", json={"tags": ["p3", "p4"]})
+    assert client.get(f"/api/conversations/{cid}").json()["tags"] == ["p3", "p4"]
+
+
+def test_conversation_tags_accept_csv_string(client):
+    """A comma-separated string (or a bare string) must not be silently dropped —
+    it should be coerced into a list of tags on create and on PATCH /meta."""
+    # create with a CSV string
+    cid = client.post(
+        "/api/conversations",
+        json={"title": "csv", "tags": "alpha, beta , gamma"},
+    ).json()["id"]
+    got = client.get(f"/api/conversations/{cid}").json()
+    assert got["tags"] == ["alpha", "beta", "gamma"]
+
+    # create with a single bare string (no comma)
+    cid2 = client.post("/api/conversations", json={"title": "solo", "tags": "only"}).json()["id"]
+    assert client.get(f"/api/conversations/{cid2}").json()["tags"] == ["only"]
+
+    # PATCH accepts a CSV string too
+    client.patch(f"/api/conversations/{cid}/meta", json={"tags": "delta, epsilon"})
+    assert client.get(f"/api/conversations/{cid}").json()["tags"] == ["delta", "epsilon"]
+
+    # None / empty string still normalize to []
+    client.patch(f"/api/conversations/{cid}/meta", json={"tags": ""})
+    assert client.get(f"/api/conversations/{cid}").json()["tags"] == []
+
+    # lists still work as before
+    client.patch(f"/api/conversations/{cid}/meta", json={"tags": ["zeta", "eta"]})
+    assert client.get(f"/api/conversations/{cid}").json()["tags"] == ["zeta", "eta"]
+
+
+# ---------------------------------------------------------------------------
+# F6 conversation export
+# ---------------------------------------------------------------------------
+
+def test_export_conversation_markdown_and_json(fake_provider, client):
+    cid = make_conversation(client)
+    client.post("/api/chat", json={"messages": [{"role": "user", "content": "hello world"}], "conversation_id": cid})
+    md = client.get(f"/api/conversations/{cid}/export?fmt=md")
+    assert md.status_code == 200
+    assert md.headers["content-type"].startswith("text/markdown")
+    assert "# " in md.text and "hello world" in md.text
+    js = client.get(f"/api/conversations/{cid}/export?fmt=json")
+    assert js.status_code == 200
+    data = js.json()
+    assert data["id"] == cid
+    assert any(m["role"] == "user" and m["content"] == "hello world" for m in data["messages"])
+    assert client.get("/api/conversations/conv_nope/export").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# F7 structured web_search + citations attached to the agent response
+# ---------------------------------------------------------------------------
+
+def test_web_search_returns_structured_citations(monkeypatch):
+    monkeypatch.setattr(backend, "YOU_API_KEY", "fake-key")
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"hits": [
+                {"title": "Nova Docs", "url": "https://nova.example/docs", "snippets": ["A page about Nova."]}
+            ]}
+
+    monkeypatch.setattr(backend.httpx, "get", lambda *a, **k: FakeResp())
+    res = backend.tool_web_search("nova chat")
+    assert isinstance(res, dict)
+    assert res["citations"] == [{"title": "Nova Docs", "url": "https://nova.example/docs", "snippet": "A page about Nova."}]
+    assert "Nova Docs" in res["text"]
+    assert "https://nova.example/docs" in res["text"]
+
+
+def test_agent_chat_attaches_citations(client, monkeypatch):
+    state = {"turn": 0}
+
+    async def fake_call_llm(messages, model, api_key, provider="nova", tools=None,
+                            reasoning_effort=None, extra_params=None):
+        state["turn"] += 1
+        if state["turn"] == 1:
+            return {"id": "cm-1", "model": model, "choices": [{"message": {
+                "role": "assistant", "content": "",
+                "tool_calls": [{"id": "t1", "type": "function", "function": {
+                    "name": "web_search", "arguments": json.dumps({"query": "nova chat"})
+                }}],
+            }}]}
+        return {"id": "cm-2", "model": model,
+                "choices": [{"message": {"role": "assistant", "content": "Nova is a chat app."}}]}
+
+    monkeypatch.setattr(backend, "call_llm", fake_call_llm)
+    monkeypatch.setitem(backend.TOOL_IMPLS, "web_search",
+                        lambda query, max_results=5: {
+                            "text": "Nova docs result",
+                            "citations": [{"title": "Nova", "url": "https://nova.example", "snippet": "docs"}]})
+    r = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "tell me about nova"}],
+        "provider": "openai", "model": "gpt-4o", "agent": True,
+        "api_key": "fake", "max_tool_rounds": 5,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["agent"] is True
+    assert body["content"] == "Nova is a chat app."
+    assert body["citations"] == [{"title": "Nova", "url": "https://nova.example", "snippet": "docs"}]
+    assert any(t["type"] == "tool" and t["name"] == "web_search" for t in body["trace"])
+
+
+# ---------------------------------------------------------------------------
+# F7b agent workspace: write_file / list_workspace with path containment
+# ---------------------------------------------------------------------------
+
+def test_workspace_write_list_and_containment(tmp_path, monkeypatch):
+    monkeypatch.setattr(backend, "WORKSPACE_ROOT", tmp_path)
+    assert "Wrote" in backend.tool_write_file("notes.txt", "hello workspace")
+    assert "notes.txt" in backend.tool_list_workspace()
+    # path-traversal escapes are rejected (realpath, not prefix) ...
+    assert backend.tool_write_file("../../etc/evil.txt", "pwned").startswith("Access denied")
+    # ... and absolute paths outside the workspace too.
+    assert backend.tool_write_file("/etc/passwd", "x").startswith("Access denied")
+
+
+# ---------------------------------------------------------------------------
+# F8 custom personas CRUD + owner gating
+# ---------------------------------------------------------------------------
+
+def test_personas_crud(client):
+    assert client.get("/api/personas").json()["personas"] == []
+    r = client.post("/api/personas", json={"name": "Coder", "system_prompt": "You are helpful."})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    ps = client.get("/api/personas").json()["personas"]
+    assert any(p["id"] == pid and p["name"] == "Coder" and p["system_prompt"] == "You are helpful." for p in ps)
+    assert client.put(f"/api/personas/{pid}", json={"name": "Coder2", "system_prompt": "updated"}).status_code == 200
+    assert client.get("/api/personas").json()["personas"][0]["name"] == "Coder2"
+    assert client.delete(f"/api/personas/{pid}").status_code == 200
+    assert not any(p["id"] == pid for p in client.get("/api/personas").json()["personas"])
+    assert client.put("/api/personas/nope", json={"name": "x"}).status_code == 404
+    assert client.delete("/api/personas/nope").status_code == 404
+
+
+def test_personas_owner_gate_when_locked(locked_client):
+    # unauthenticated -> 401 (auth middleware) ...
+    assert locked_client.post("/api/personas", json={"name": "x", "system_prompt": "y"}).status_code == 401
+    # ... owned once logged in.
+    assert locked_client.post("/api/auth/login", json={"passphrase": "secret-owner-pass"}).status_code == 200
+    r = locked_client.post("/api/personas", json={"name": "x", "system_prompt": "y"})
+    assert r.status_code == 200
+    assert "id" in r.json()
+
+
+# ---------------------------------------------------------------------------
+# F5 gateway key scopes + per-key rate limit (429)
+# ---------------------------------------------------------------------------
+
+def test_gateway_key_scopes_and_quota(fake_provider, client):
+    r = client.post("/api/gateway/keys", json={
+        "name": "scoped", "scope": "inception",
+        "daily_quota_tokens": 1000, "rate_limit_per_min": 2,
+    })
+    assert r.status_code == 200
+    raw = r.json()["key"]
+    keys = client.get("/api/gateway/keys").json()["keys"]
+    sk = next(k for k in keys if k["name"] == "scoped")
+    assert sk["scope"] == "inception" and sk["daily_quota_tokens"] == 1000 and sk["rate_limit_per_min"] == 2
+
+    h = {"Authorization": f"Bearer {raw}"}
+    b = {"model": "gemini/gemini-3.6-flash", "messages": [{"role": "user", "content": "hi"}]}
+    assert client.post("/v1/chat/completions", headers=h, json=b).status_code == 403  # out of scope
+
+    ok = client.post("/v1/chat/completions", headers=h, json={
+        "model": "inception/mercury-2", "messages": [{"role": "user", "content": "hi"}]})
+    assert ok.status_code == 200
+    assert ok.json()["choices"][0]["message"]["content"] == "fake reply 1"
+
+
+def test_gateway_rate_limit_429(fake_provider, client, monkeypatch):
+    monkeypatch.setattr(backend, "_ACTOR_HITS", {})
+    r = client.post("/api/gateway/keys", json={"name": "rl", "rate_limit_per_min": 1})
+    raw = r.json()["key"]
+    h = {"Authorization": f"Bearer {raw}"}
+    b = {"model": "inception/mercury-2", "messages": [{"role": "user", "content": "hi"}]}
+    assert client.post("/v1/chat/completions", headers=h, json=b).status_code == 200
+    over = client.post("/v1/chat/completions", headers=h, json=b)
+    assert over.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# F10 doc-as-context attach
+# ---------------------------------------------------------------------------
+
+def test_attach_extracts_text(client):
+    from io import BytesIO
+    r = client.post("/api/attach", files={"file": ("notes.txt", BytesIO(b"hello attach world"), "text/plain")})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["filename"] == "notes.txt"
+    assert "hello attach world" in body["content"]
+
+
+def test_attach_rejects_oversize(client, monkeypatch):
+    monkeypatch.setattr(backend, "NOVA_MAX_UPLOAD_MB", 0)
+    from io import BytesIO
+    r = client.post("/api/attach", files={"file": ("big.txt", BytesIO(b"x" * 1024), "text/plain")})
+    assert r.status_code == 413

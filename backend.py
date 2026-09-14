@@ -52,6 +52,13 @@ APP_PORT = int(os.getenv("APP_PORT", "8000"))
 DEFAULT_MODEL = os.getenv("NOVA_MODEL", "nova-2-lite-v1")
 # Directory the read_file tool is allowed to read from (keeps the demo safe).
 SANDBOX_ROOT = Path(os.getenv("NOVA_SANDBOX", str(Path.home() / "Downloads"))).resolve()
+# Flat scratch directory the write_file / list_workspace tools are allowed to
+# mutate (kept outside the repo so the agent can save outputs safely). Path
+# traversal is rejected with a realpath containment check, not a prefix test.
+WORKSPACE_ROOT: Path = (
+    Path(os.getenv("NOVA_WORKSPACE", str(Path.home() / ".nova_workspace"))).resolve()
+)
+WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
 
 # ---- provider: Azure AI Foundry (OpenAI-compatible) ----
 FOUNDRY_BASE_URL = os.getenv(
@@ -613,6 +620,29 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write the given content to a file in the agent's scratch workspace (e.g. 'notes.txt' or 'out/summary.md'). Use this to persist research outputs, notes, or intermediate work while working. Returns the bytes written.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "A relative filename (subpaths allowed, e.g. 'out/notes.txt') inside the agent workspace. No leading slash, no '..'."},
+                    "content": {"type": "string", "description": "Text content to write (UTF-8)."},
+                },
+                "required": ["filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_workspace",
+            "description": "List the files currently in the agent's scratch workspace (name + size).",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 # ----------------------------------------------------------------------------
@@ -724,8 +754,26 @@ def _ddg_decode_url(href: str) -> str:
     return href
 
 
-def tool_web_search(query: str, max_results: int = 5) -> str:
+def tool_web_search(query: str, max_results: int = 5) -> Dict[str, Any]:
+    """Returns {"text": <results as text for the model>, "citations": [
+        {"title","url","snippet"}]}. The `text` is fed back to the model as the
+        tool result; `citations` are surfaced by the UI as a clickable Sources
+    list (F7)."""
     max_results = max(1, min(max_results, 8))
+    citations: List[Dict[str, str]] = []
+
+    def add(url: str, title: str, snippet: str) -> None:
+        if url:
+            citations.append({"title": (title or url)[:200], "url": url, "snippet": (snippet or "")[:280]})
+
+    def render() -> str:
+        if not citations:
+            return "No results found."
+        out = []
+        for i, c in enumerate(citations):
+            out.append(f"{i + 1}. {c['title']}\n   {c['url']}" + (f"\n   {c['snippet']}" if c['snippet'] else ""))
+        return "\n".join(out)
+
     # Preferred backend: you.com Web Search API (clean JSON, no scraping) when
     # YOU_API_KEY is configured; DuckDuckGo HTML otherwise (free, no key).
     if YOU_API_KEY:
@@ -737,16 +785,12 @@ def tool_web_search(query: str, max_results: int = 5) -> str:
                 timeout=15.0,
             )
             if r.status_code == 200:
-                hits = (r.json() or {}).get("hits") or []
-                out: List[str] = []
-                for i, h in enumerate(hits[:max_results]):
+                for h in (r.json() or {}).get("hits") or []:
                     title = (h.get("title") or "").strip()
                     url = h.get("url") or ""
                     desc = " ".join(h.get("snippets") or []) or (h.get("description") or "")
-                    out.append(f"{i + 1}. {title}\n   {url}" + (f"\n   {desc[:280]}" if desc else ""))
-                if out:
-                    return "\n".join(out)
-                return "you.com returned no results for that query."
+                    add(url, title, desc)
+                return {"text": render(), "citations": citations[:max_results]}
             logger.warning("you.com search HTTP %s — falling back to DuckDuckGo", r.status_code)
         except Exception as e:  # noqa: BLE001
             logger.warning("you.com search failed (%s) — falling back to DuckDuckGo", e)
@@ -760,23 +804,21 @@ def tool_web_search(query: str, max_results: int = 5) -> str:
             follow_redirects=True,
         )
     except Exception as e:  # noqa: BLE001
-        return f"Web search failed: {e}"
+        return {"text": f"Web search failed: {e}", "citations": []}
     if r.status_code != 200:
-        return f"Web search unavailable (HTTP {r.status_code} from DuckDuckGo). Try again later."
+        return {"text": f"Web search unavailable (HTTP {r.status_code} from DuckDuckGo). Try again later.", "citations": []}
     html_ = r.text
     links = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html_, re.S)
     if not links:
         links = re.findall(r'<a[^>]+href="([^"]+)"[^>]*class="result__a"[^>]*>(.*?)</a>', html_, re.S)
     snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html_, re.S)
     if not links:
-        return "No results found (or DuckDuckGo changed its markup / flagged the query)."
-    out: List[str] = []
+        return {"text": "No results found (or DuckDuckGo changed its markup / flagged the query).", "citations": []}
     for i, (href, title) in enumerate(links[:max_results]):
-        title_txt = _strip_html(title)
         url = _ddg_decode_url(href)
         snip = _strip_html(snippets[i]) if i < len(snippets) else ""
-        out.append(f"{i + 1}. {title_txt}\n   {url}" + (f"\n   {snip[:280]}" if snip else ""))
-    return "\n".join(out)
+        add(url, _strip_html(title), snip)
+    return {"text": render(), "citations": citations}
 
 
 # ---- SSRF guard for the public-fetch agent tools --------------------------
@@ -900,10 +942,56 @@ def tool_http_headers(url: str) -> str:
     return "\n".join(lines)
 
 
+def _workspace_target(filename: str) -> Optional[Path]:
+    """Resolve `filename` under WORKSPACE_ROOT, rejecting anything that escapes
+    it (../, absolute paths, /dev/null …). Returns the resolved path or None."""
+    safe = (WORKSPACE_ROOT / filename).resolve()
+    try:
+        contained = safe.is_relative_to(WORKSPACE_ROOT) and safe != WORKSPACE_ROOT
+    except AttributeError:  # Python < 3.9 fallback
+        contained = (
+            os.path.commonpath([str(safe), str(WORKSPACE_ROOT)]) == str(WORKSPACE_ROOT)
+            and safe != WORKSPACE_ROOT
+        )
+    return safe if contained else None
+
+
+def tool_list_workspace() -> str:
+    """List files in the agent's scratch workspace (name + size)."""
+    if not WORKSPACE_ROOT.exists():
+        return "Workspace is empty."
+    rows = []
+    for p in sorted(WORKSPACE_ROOT.iterdir()):
+        if p.is_file():
+            try:
+                rows.append(f"{p.name}\t{p.stat().st_size} bytes")
+            except OSError:
+                rows.append(p.name)
+    return "\n".join(rows) if rows else "Workspace is empty."
+
+
+def tool_write_file(filename: str, content: str = "") -> str:
+    """Write `content` to `filename` in the agent's scratch workspace. Filenames
+    may include a relative subpath (e.g. 'out/notes.txt') but may not escape it
+    via '..' or '/'. Returns the bytes written."""
+    target = _workspace_target(filename)
+    if target is None:
+        return f"Access denied: '{filename}' is outside the workspace directory."
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data = content.encode("utf-8") if isinstance(content, str) else str(content)
+    try:
+        target.write_bytes(data)
+    except Exception as e:  # noqa: BLE001
+        return f"Could not write file: {e}"
+    return f"Wrote {len(data)} bytes to {filename}"
+
+
 TOOL_IMPLS = {
     "get_time": tool_get_time,
     "calculate": tool_calculate,
     "read_file": tool_read_file,
+    "write_file": tool_write_file,
+    "list_workspace": tool_list_workspace,
     "web_search": tool_web_search,
     "web_fetch": tool_web_fetch,
     "http_headers": tool_http_headers,
@@ -913,8 +1001,8 @@ TOOL_IMPLS = {
 # the full set (back-compat). The frontend maps personas to presets: NovaSec
 # -> security, default agent -> research.
 _PRESET_CORE = ["get_time", "calculate", "read_file"]
-_PRESET_RESEARCH = _PRESET_CORE + ["web_search", "web_fetch"]
-_PRESET_SECURITY = _PRESET_CORE + ["web_search", "web_fetch", "http_headers"]
+_PRESET_RESEARCH = _PRESET_CORE + ["web_search", "web_fetch", "list_workspace", "write_file"]
+_PRESET_SECURITY = _PRESET_CORE + ["web_search", "web_fetch", "http_headers", "list_workspace", "write_file"]
 TOOL_PRESETS = {"core": _PRESET_CORE, "research": _PRESET_RESEARCH, "security": _PRESET_SECURITY}
 
 
@@ -928,14 +1016,20 @@ def _tools_for_preset(preset: Optional[str]) -> List[Dict[str, Any]]:
 
 
 
-def run_tool(name: str, arguments: Dict[str, Any]) -> str:
+def run_tool(name: str, arguments: Dict[str, Any]) -> Any:
+    """Run an in-process tool. Structured results (dicts, e.g. web_search with
+    inline citations) are returned as-is; scalar results are stringified so
+    they read naturally when echoed back to the model as the tool result."""
     impl = TOOL_IMPLS.get(name)
     if not impl:
         return f"Unknown tool: {name}"
     try:
-        return str(impl(**arguments))
+        res = impl(**arguments)
     except TypeError as e:
         return f"Bad arguments for {name}: {e}"
+    if isinstance(res, dict):
+        return res
+    return str(res)
 
 
 # ----------------------------------------------------------------------------
@@ -1142,7 +1236,8 @@ def _gateway_key_from_request(request: Request) -> Optional[Dict[str, Any]]:
     kh = _hash_key(raw)
     conn = _db()
     row = conn.execute(
-        "SELECT key_hash, name, key_prefix, created_at, last_used_at, enabled FROM gateway_keys WHERE key_hash = ? AND enabled = 1",
+        "SELECT key_hash, name, key_prefix, created_at, last_used_at, enabled, scope, "
+        "daily_quota_tokens, rate_limit_per_min FROM gateway_keys WHERE key_hash = ? AND enabled = 1",
         (kh,),
     ).fetchone()
     if row:
@@ -1158,16 +1253,35 @@ def _require_owner(request: Request) -> None:
         raise HTTPException(403, "Owner token required to manage gateway keys.")
 
 
-def _gateway_rate_limit(actor: str) -> None:
-    """Gateway keys always have their own auth, so the rate limit always applies."""
-    if NOVA_RATE_LIMIT_PER_MIN <= 0:
-        return
-    now = time.time()
-    hits = [t for t in _ACTOR_HITS.get(actor, []) if now - t < 60]
-    if len(hits) >= NOVA_RATE_LIMIT_PER_MIN:
-        raise HTTPException(429, f"Gateway rate limit reached ({NOVA_RATE_LIMIT_PER_MIN} req/min for '{actor}').")
-    hits.append(now)
-    _ACTOR_HITS[actor] = hits
+def _enforce_gateway_key_limits(key: Dict[str, Any]) -> None:
+    """Per-key enforcement for gateway keys (actor 'gw:<name>'):
+       - rate_limit_per_min overrides the global NOVA_RATE_LIMIT_PER_MIN when set (>0)
+       - daily_quota_tokens rejects requests once the key has consumed its
+         24h token budget for today.
+       Called once at the start of /v1/chat/completions so both the streaming
+       and non-streaming codepaths are capped before any tokens are burned."""
+    actor = f"gw:{key['name']}"
+    rl = key.get("rate_limit_per_min") or 0
+    if rl <= 0:
+        rl = NOVA_RATE_LIMIT_PER_MIN
+    if rl > 0:
+        now = time.time()
+        hits = [t for t in _ACTOR_HITS.get(actor, []) if now - t < 60]
+        if len(hits) >= rl:
+            raise HTTPException(429, f"Gateway rate limit reached for key '{key['name']}' ({rl}/min).")
+        hits.append(now)
+        _ACTOR_HITS[actor] = hits
+    dq = key.get("daily_quota_tokens") or 0
+    if dq > 0:
+        conn = _db()
+        row = conn.execute(
+            "SELECT COALESCE(SUM(total_tokens), 0) FROM usage_ledger "
+            "WHERE actor = ? AND created_at >= ?",
+            (actor, time.time() - 86400),
+        ).fetchone()
+        conn.close()
+        if (row[0] or 0) >= dq:
+            raise HTTPException(429, f"Daily token quota reached for key '{key['name']}' ({dq}/24h).")
 
 
 def _parse_gateway_model(model: str) -> tuple:
@@ -1183,6 +1297,9 @@ def _parse_gateway_model(model: str) -> tuple:
 
 class GatewayKeyCreate(BaseModel):
     name: str = ""
+    scope: str = ""                 # optional allowlist of providers/models (empty = all)
+    daily_quota_tokens: int = 0      # 0 = unlimited
+    rate_limit_per_min: int = 0      # 0 = fall back to NOVA_RATE_LIMIT_PER_MIN
 
 
 @app.post("/api/gateway/keys")
@@ -1192,14 +1309,19 @@ async def create_gateway_key(request: Request, body: GatewayKeyCreate):
     _require_owner(request)
     name = (body.name or "").strip()[:40] or "unnamed"
     raw = "sk-nova-" + secrets.token_hex(24)
+    sk = (body.scope or "").strip()  # "" => no restriction (DB default kept for legacy rows)
+    dq = int(body.daily_quota_tokens or 0)
+    rl = int(body.rate_limit_per_min or 0)
     conn = _db()
     conn.execute(
-        "INSERT INTO gateway_keys (key_hash, name, key_prefix, created_at, enabled) VALUES (?, ?, ?, ?, 1)",
-        (_hash_key(raw), name, raw[:14], time.time()),
+        ("INSERT INTO gateway_keys (key_hash, name, key_prefix, created_at, enabled, "
+         "scope, daily_quota_tokens, rate_limit_per_min) VALUES (?, ?, ?, ?, 1, ?, ?, ?)"),
+        (_hash_key(raw), name, raw[:14], time.time(), sk, dq, rl),
     )
     conn.commit()
     conn.close()
-    return {"ok": True, "name": name, "key": raw, "prefix": raw[:14]}
+    return {"ok": True, "name": name, "key": raw, "prefix": raw[:14],
+            "scope": sk, "daily_quota_tokens": dq, "rate_limit_per_min": rl}
 
 
 @app.get("/api/gateway/keys")
@@ -1208,6 +1330,7 @@ async def list_gateway_keys(request: Request):
     conn = _db()
     rows = conn.execute(
         """SELECT k.key_hash, k.name, k.key_prefix, k.created_at, k.last_used_at, k.enabled,
+                  k.scope, k.daily_quota_tokens, k.rate_limit_per_min,
                   COALESCE(SUM(CASE WHEN l.created_at >= ? THEN l.total_tokens END), 0) AS today_tokens,
                   COALESCE(SUM(l.total_tokens), 0) AS total_tokens,
                   COUNT(l.id) AS calls
@@ -1221,6 +1344,8 @@ async def list_gateway_keys(request: Request):
     return {"keys": [
         {"name": r["name"], "prefix": r["key_prefix"], "created_at": r["created_at"],
          "last_used_at": r["last_used_at"], "enabled": bool(r["enabled"]),
+         "scope": r["scope"], "daily_quota_tokens": r["daily_quota_tokens"] or 0,
+         "rate_limit_per_min": r["rate_limit_per_min"] or 0,
          "today_tokens": r["today_tokens"] or 0, "total_tokens": r["total_tokens"] or 0,
          "calls": r["calls"]}
         for r in rows
@@ -1316,10 +1441,16 @@ async def v1_chat_completions(request: Request, body: V1ChatCompletion):
     if not key:
         raise HTTPException(401, "Invalid or missing gateway API key.")
     actor = f"gw:{key['name']}"
-    _gateway_rate_limit(actor)
+    _enforce_gateway_key_limits(key)
 
     provider, model = _parse_gateway_model(body.model)
     model = _resolve_model(provider, model)
+    # Per-key scope allowlist (empty / legacy 'gateway' sentinel = unrestricted).
+    scope = (key.get("scope") or "").strip()
+    if scope and scope != "gateway":
+        allowed = {p.strip() for p in scope.split(",") if p.strip()}
+        if provider not in allowed:
+            raise HTTPException(403, f"Gateway key not scoped for provider '{provider}'.")
     api_key = _provider_key(provider)
     if not api_key:
         raise HTTPException(400, f"No API key configured for provider '{provider}'.")
@@ -1960,6 +2091,40 @@ def init_db() -> None:
         conn.execute("ALTER TABLE usage_ledger ADD COLUMN actor TEXT")
     except sqlite3.OperationalError:
         pass  # column already exists
+
+    # Feature-sprint migrations (all idempotent — safe on the phone's live DB):
+    #   - conversation organization: folder / tags / pinned / archived + persona
+    #   - usage ledger: cost_usd (POC pricing surfaced in the Usage tab)
+    #   - gateway keys: per-key scope + daily quota + custom rate limit
+    for _tbl, _col, _decl in (
+        ("conversations", "folder", "TEXT NOT NULL DEFAULT ''"),
+        ("conversations", "tags", "TEXT NOT NULL DEFAULT '[]'"),
+        ("conversations", "pinned", "INTEGER NOT NULL DEFAULT 0"),
+        ("conversations", "archived", "INTEGER NOT NULL DEFAULT 0"),
+        ("conversations", "persona_id", "TEXT"),
+        ("usage_ledger", "cost_usd", "REAL"),
+        ("gateway_keys", "scope", "TEXT NOT NULL DEFAULT 'gateway'"),
+        ("gateway_keys", "daily_quota_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("gateway_keys", "rate_limit_per_min", "INTEGER"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_decl}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    # Custom personas table (persisted named system prompts).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS personas (
+            id            TEXT PRIMARY KEY,
+            name          TEXT NOT NULL,
+            system_prompt TEXT NOT NULL,
+            provider      TEXT,
+            model         TEXT,
+            tools_preset  TEXT,
+            created_at    REAL NOT NULL
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -1976,25 +2141,43 @@ def _row_to_msg(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
-def db_create_conversation(provider: str, model_name: str, title: str = "") -> Dict[str, Any]:
+def db_create_conversation(provider: str, model_name: str, title: str = "",
+                           folder: str = "", tags: Optional[List[str]] = None,
+                           persona_id: Optional[str] = None) -> Dict[str, Any]:
     now = time.time()
     cid = f"conv_{uuid.uuid4().hex[:12]}"
     conn = _db()
     conn.execute(
-        "INSERT INTO conversations (id, title, provider, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (cid, title or "New conversation", provider, model_name, now, now),
+        """INSERT INTO conversations
+              (id, title, provider, model, created_at, updated_at, folder, tags, persona_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (cid, title or "New conversation", provider, model_name, now, now,
+         folder or "", json.dumps(_coerce_tags(tags)), persona_id or None),
     )
     conn.commit()
     conn.close()
-    return {"id": cid, "title": title or "New conversation", "provider": provider, "model": model_name}
+    return {
+        "id": cid,
+        "title": title or "New conversation",
+        "provider": provider,
+        "model": model_name,
+        "folder": folder or "",
+        "tags": _coerce_tags(tags),
+        "pinned": False,
+        "archived": False,
+        "persona_id": persona_id,
+    }
 
 
-def db_list_conversations() -> List[Dict[str, Any]]:
+def db_list_conversations(include_archived: bool = False) -> List[Dict[str, Any]]:
     conn = _db()
+    where = "" if include_archived else "WHERE c.archived = 0"
     rows = conn.execute(
-        """SELECT c.id, c.title, c.provider, c.model, c.created_at, c.updated_at,
+        f"""SELECT c.id, c.title, c.provider, c.model, c.folder, c.tags,
+                  c.pinned, c.archived, c.persona_id, c.created_at, c.updated_at,
                   (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS msg_count
-           FROM conversations c ORDER BY c.updated_at DESC"""
+           FROM conversations c {where}
+           ORDER BY c.pinned DESC, c.updated_at DESC"""
     ).fetchall()
     conn.close()
     return [
@@ -2003,6 +2186,11 @@ def db_list_conversations() -> List[Dict[str, Any]]:
             "title": r["title"],
             "provider": r["provider"],
             "model": r["model"],
+            "folder": r["folder"] or "",
+            "tags": _parse_tags(r["tags"]),
+            "pinned": bool(r["pinned"]),
+            "archived": bool(r["archived"]),
+            "persona_id": r["persona_id"],
             "created_at": r["created_at"],
             "updated_at": r["updated_at"],
             "msg_count": r["msg_count"],
@@ -2014,10 +2202,11 @@ def db_list_conversations() -> List[Dict[str, Any]]:
 def db_get_conversation(cid: str, last: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """Full conversation, or (when `last=N`) only the most recent N messages —
     the mobile-app-friendly shape. Paginated responses add total_messages and
-    has_more so a client can offer 'load earlier'."""
+    has_more so a client can offer 'load earlier'. Also returns the conversation's
+    persisted folder/tags/pinned/archived/persona (per-chat model override)."""
     conn = _db()
     conv = conn.execute(
-        "SELECT id, title, provider, model, created_at, updated_at FROM conversations WHERE id = ?",
+        "SELECT id, title, provider, model, folder, tags, pinned, archived, persona_id, created_at, updated_at FROM conversations WHERE id = ?",
         (cid,),
     ).fetchone()
     if conv is None:
@@ -2043,6 +2232,11 @@ def db_get_conversation(cid: str, last: Optional[int] = None) -> Optional[Dict[s
         "title": conv["title"],
         "provider": conv["provider"],
         "model": conv["model"],
+        "folder": conv["folder"] or "",
+        "tags": _parse_tags(conv["tags"]),
+        "pinned": bool(conv["pinned"]),
+        "archived": bool(conv["archived"]),
+        "persona_id": conv["persona_id"],
         "created_at": conv["created_at"],
         "updated_at": conv["updated_at"],
         "messages": [_row_to_msg(m) for m in rows],
@@ -2071,6 +2265,60 @@ def db_update_conversation_title(cid: str, title: str) -> bool:
 def db_delete_conversation(cid: str) -> bool:
     conn = _db()
     cur = conn.execute("DELETE FROM conversations WHERE id = ?", (cid,))
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def _coerce_tags(v: Any) -> List[str]:
+    """Normalize tags into a list of non-empty strings.
+
+    Accepts a list/tuple/set, a single string, or a comma-separated string
+    (e.g. "a, b, c") so the API tolerates both list and CSV payloads. Previously
+    a string tag was passed straight to json.dumps -> stored as ``"a,b"`` and
+    later decoded to [] by _parse_tags, silently dropping the tags."""
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple, set)):
+        return [str(t).strip() for t in v if str(t).strip()]
+    parts = [p.strip() for p in str(v).split(",")]
+    return [p for p in parts if p]
+
+
+def _parse_tags(raw: Optional[str]) -> List[str]:
+    """Decode the JSON list stored in conversations.tags, tolerating NULL/empty/
+    malformed values (old rows, manual edits)."""
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+        return [str(t) for t in v] if isinstance(v, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def db_update_conversation_meta(cid: str, updates: Dict[str, Any]) -> bool:
+    """Update folder / tags / pinned / archived / persona_id on a conversation.
+    Unknown keys are ignored. Returns whether the row existed."""
+    allowed = {"folder", "tags", "pinned", "archived", "persona_id"}
+    cols = {k: v for k, v in updates.items() if k in allowed}
+    if not cols:
+        return True
+    sets: List[str] = []
+    params: List[Any] = []
+    for k, v in cols.items():
+        if k == "tags":
+            params.append(json.dumps(_coerce_tags(v)))
+        elif k in ("pinned", "archived"):
+            params.append(1 if v else 0)
+        else:
+            params.append(v or None)
+        sets.append(f"{k} = ?")
+    conn = _db()
+    cur = conn.execute(
+        f"UPDATE conversations SET {', '.join(sets)} WHERE id = ?",
+        (*params, cid),
+    )
     conn.commit()
     conn.close()
     return cur.rowcount > 0
@@ -2124,12 +2372,12 @@ def db_save_message(
             """INSERT INTO usage_ledger
                (conversation_id, role, provider, model,
                 prompt_tokens, completion_tokens, total_tokens,
-                reasoning_tokens, raw_usage, created_at, actor)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                reasoning_tokens, raw_usage, created_at, actor, cost_usd)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (cid, role, provider or "", model or "",
              u.get("prompt_tokens"), u.get("completion_tokens"), u.get("total_tokens"),
              u.get("reasoning_tokens") or u.get("thinking_tokens") or u.get("reasoning_output_tokens"),
-             json.dumps(u), now, actor or ""),
+             json.dumps(u), now, actor or "", _cost_usd(provider or "", model or "", u)),
         )
     # Touch the conversation's updated_at.
     conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
@@ -2171,15 +2419,44 @@ def db_record_usage(provider: str, model: str, usage: Optional[Dict], actor: str
         """INSERT INTO usage_ledger
            (conversation_id, role, provider, model,
             prompt_tokens, completion_tokens, total_tokens,
-            reasoning_tokens, raw_usage, created_at, actor)
-           VALUES ('', 'assistant', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            reasoning_tokens, raw_usage, created_at, actor, cost_usd)
+           VALUES ('', 'assistant', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (provider or "", model or "",
          u.get("prompt_tokens"), u.get("completion_tokens"), u.get("total_tokens"),
          u.get("reasoning_tokens") or u.get("thinking_tokens") or u.get("reasoning_output_tokens"),
-         json.dumps(u), time.time(), actor or ""),
+         json.dumps(u), time.time(), actor or "", _cost_usd(provider or "", model or "", u)),
     )
     conn.commit()
     conn.close()
+
+
+# --- cost estimates (POC; approximate list prices in USD per 1k tokens) --------
+# key = "provider/model" -> (prompt_per_1k, completion_per_1k). Unknown models
+# yield cost_usd=None (no fabricated price); the UI shows token counts only then.
+MODEL_PRICE: Dict[str, Any] = {
+    "nova/nova-2-lite-v1":   (0.06, 0.24),
+    "nova/nova-2-pro-v1":    (0.70, 2.80),
+    "gemini/gemini-3.6-flash": (0.075, 0.30),
+    "gemini/gemini-3.5-flash": (0.01, 0.04),
+    "foundry/gpt-5-mini":    (0.60, 2.40),
+    "foundry/gpt-4o":        (2.50, 10.00),
+    "foundry/gpt-4o-mini":   (0.15, 0.60),
+    "cohere/command-a-plus-05-2026": (0.30, 1.05),
+}
+
+
+def _cost_usd(provider: str, model: str, usage: Optional[Dict]) -> Optional[float]:
+    """Approximate USD cost for a usage dict. None when there's no usage or no
+    price entry for this provider/model (the UI then falls back to tokens only)."""
+    if not usage:
+        return None
+    price = MODEL_PRICE.get(f"{provider}/{model}")
+    if not price:
+        return None
+    pp, cp = price
+    p = usage.get("prompt_tokens") or 0
+    c = usage.get("completion_tokens") or 0
+    return round(pp * p / 1000 + cp * c / 1000, 6)
 
 
 # Initialize tables on import (idempotent, safe for containers).
@@ -2204,7 +2481,8 @@ def db_usage_summary(provider: Optional[str] = None, model: Optional[str] = None
         f"""SELECT COALESCE(SUM(prompt_tokens),0),
                   COALESCE(SUM(completion_tokens),0),
                   COALESCE(SUM(total_tokens),0),
-                  COUNT(*)
+                  COUNT(*),
+                  COALESCE(SUM(cost_usd),0)
            FROM usage_ledger {clause}""",
         params,
     ).fetchone()
@@ -2213,7 +2491,8 @@ def db_usage_summary(provider: Optional[str] = None, model: Optional[str] = None
                   COALESCE(SUM(prompt_tokens),0),
                   COALESCE(SUM(completion_tokens),0),
                   COALESCE(SUM(total_tokens),0),
-                  COUNT(*)
+                  COUNT(*),
+                  COALESCE(SUM(cost_usd),0)
            FROM usage_ledger
            WHERE (model IS NOT NULL AND model != ''){" AND " + " AND ".join(where) if where else ""}
            GROUP BY provider, model
@@ -2258,10 +2537,12 @@ def db_usage_summary(provider: Optional[str] = None, model: Optional[str] = None
     conn.close()
     return {
         "total": {"prompt_tokens": total[0], "completion_tokens": total[1],
-                  "total_tokens": total[2], "calls": total[3]},
+                  "total_tokens": total[2], "calls": total[3],
+                  "cost_usd": round(total[4] or 0.0, 6)},
         "by_model": [
             {"provider": r[0], "model": r[1], "prompt_tokens": r[2],
-             "completion_tokens": r[3], "total_tokens": r[4], "calls": r[5]}
+             "completion_tokens": r[3], "total_tokens": r[4], "calls": r[5],
+             "cost_usd": round(r[6] or 0.0, 6)}
             for r in by_model
         ],
         "by_provider": [
@@ -2304,19 +2585,29 @@ def db_usage_recent(limit: int = 50) -> List[Dict[str, Any]]:
 
 
 @app.get("/api/conversations")
-async def list_conversations():
-    """Return all conversations (most recent first, with message counts)."""
-    return {"conversations": db_list_conversations()}
+async def list_conversations(request: Request):
+    """Return all (non-archived) conversations, most recent + pinned first.
+    ?archived=1 also includes archived conversations (which the UI hides by default)."""
+    include_archived = request.query_params.get("archived") == "1"
+    return {"conversations": db_list_conversations(include_archived)}
 
 
 @app.post("/api/conversations")
 async def new_conversation(req: Optional[Dict[str, Any]] = None):
-    """Create a new conversation. Returns the full conversation object."""
+    """Create a new conversation. Returns the full conversation object.
+
+    Accepts an optional per-chat override: provider/model (the chat remembers
+    which model it was created with), folder, tags, and persona (the id of a
+    custom persona from /api/personas) so the UI can restore it on reopen."""
     body = req or {}
     provider = body.get("provider") or DEFAULT_PROVIDER
     model_name = body.get("model") or PROVIDERS.get(provider, {}).get("default_model", DEFAULT_MODEL)
-    title = body.get("title") or ""
-    return db_create_conversation(provider, model_name, title)
+    return db_create_conversation(
+        provider, model_name, body.get("title") or "",
+        folder=body.get("folder") or "",
+        tags=body.get("tags"),
+        persona_id=body.get("persona"),
+    )
 
 
 @app.get("/api/conversations/{cid}")
@@ -2335,6 +2626,15 @@ async def rename_conversation(cid: str, req: Optional[Dict[str, Any]] = None):
     if not title.strip():
         raise HTTPException(status_code=400, detail="Title cannot be empty.")
     if not db_update_conversation_title(cid, title.strip()):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {"ok": True}
+
+
+@app.patch("/api/conversations/{cid}/meta")
+async def update_conversation_meta(cid: str, req: Optional[Dict[str, Any]] = None):
+    """Update folder / tags / pinned / archived / persona_id on a conversation.
+    Unknown keys are ignored; 404 if the conversation doesn't exist."""
+    if not db_update_conversation_meta(cid, req or {}):
         raise HTTPException(status_code=404, detail="Conversation not found.")
     return {"ok": True}
 
@@ -2362,6 +2662,96 @@ async def clear_conversation_messages(cid: str):
     removed = cur.rowcount
     conn.close()
     return {"ok": True, "removed": removed}
+
+
+@app.get("/api/conversations/{cid}/export")
+async def export_conversation(cid: str, fmt: str = "md"):
+    """Export a conversation as Markdown (default) or JSON."""
+    conv = db_get_conversation(cid)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    if fmt == "json":
+        return conv
+    lines: List[str] = [
+        f"# {conv['title']}",
+        "",
+        f"_provider: {conv['provider']} · model: {conv['model']}_",
+        "",
+    ]
+    for m in conv["messages"]:
+        role = m["role"].upper()
+        content = m.get("content") or ""
+        lines.append(f"> **{role}**")
+        lines.append(content if content else "_no content_")
+        if m.get("reasoning"):
+            lines.append(f"\n_details: {m['reasoning']}_\n")
+        lines.append("")
+    return Response(content="\n".join(lines), media_type="text/markdown")
+
+
+# ---- custom personas (persisted named system prompts) ------------------------
+class PersonaIn(BaseModel):
+    name: str = ""
+    system_prompt: str = ""
+    provider: str = ""
+    model: str = ""
+    tools_preset: str = ""
+
+
+@app.get("/api/personas")
+async def list_personas():
+    """List persisted custom personas (reads open; mutations are owner-only)."""
+    conn = _db()
+    rows = conn.execute(
+        "SELECT id, name, system_prompt, provider, model, tools_preset, created_at "
+        "FROM personas ORDER BY name"
+    ).fetchall()
+    conn.close()
+    return {"personas": [dict(r) for r in rows]}
+
+
+@app.post("/api/personas")
+async def create_persona(request: Request, body: PersonaIn):
+    _require_owner(request)
+    pid = f"pers_{uuid.uuid4().hex[:12]}"
+    conn = _db()
+    conn.execute(
+        """INSERT INTO personas (id, name, system_prompt, provider, model, tools_preset, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (pid, (body.name or "unnamed")[:80], body.system_prompt,
+         body.provider or None, body.model or None, body.tools_preset or None, time.time()),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "id": pid}
+
+
+@app.put("/api/personas/{pid}")
+async def update_persona(request: Request, pid: str, body: PersonaIn):
+    _require_owner(request)
+    conn = _db()
+    cur = conn.execute(
+        "UPDATE personas SET name=?, system_prompt=?, provider=?, model=?, tools_preset=? WHERE id=?",
+        ((body.name or "unnamed")[:80], body.system_prompt, body.provider or None,
+         body.model or None, body.tools_preset or None, pid),
+    )
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Persona not found.")
+    return {"ok": True, "id": pid}
+
+
+@app.delete("/api/personas/{pid}")
+async def delete_persona(request: Request, pid: str):
+    _require_owner(request)
+    conn = _db()
+    cur = conn.execute("DELETE FROM personas WHERE id = ?", (pid,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Persona not found.")
+    return {"ok": True}
 
 
 @app.get("/api/usage")
@@ -2464,6 +2854,7 @@ async def chat(request: Request, req: ChatRequest):
     if req.regenerate and req.conversation_id:
         db_drop_last_turn(req.conversation_id)
     trace: List[Dict[str, Any]] = []
+    all_citations: List[Dict[str, Any]] = []
     eff = (req.reasoning_effort or "").strip().lower() or None
 
     # If saving to history, capture the last user message that triggered this turn.
@@ -2520,17 +2911,23 @@ async def chat(request: Request, req: ChatRequest):
                 except json.JSONDecodeError:
                     args = {}
                 result = run_tool(name, args)
+                # Tools may return structured results (dicts with a model-facing
+                # "text" plus metadata like citations); unwrap to plain text for
+                # the model round-trip and surface any citations to the UI.
+                result_text = result["text"] if isinstance(result, dict) else result
+                if isinstance(result, dict) and result.get("citations"):
+                    all_citations.extend(result["citations"])
                 trace.append({
                     "type": "tool",
                     "name": name,
                     "arguments": args,
-                    "result": result,
+                    "result": result_text,
                 })
                 # Tool result message back to the model.
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id"),
-                    "content": result,
+                    "content": result_text,
                 })
         else:
             # Hit the round cap with tool results still pending a summary.
@@ -2580,7 +2977,9 @@ async def chat(request: Request, req: ChatRequest):
             "content": final_msg.get("content", ""),
             "reasoning": grab_reasoning(data),
             "usage": data.get("usage"),
+            "cost_usd": _cost_usd(provider, model, data.get("usage")),
             "trace": trace,
+            "citations": all_citations,
             "agent": True,
             "title": db_get_conversation_title(req.conversation_id) if req.conversation_id else None,
         })
@@ -2608,7 +3007,9 @@ async def chat(request: Request, req: ChatRequest):
             "content": msg.get("content", ""),
             "reasoning": grab_reasoning(data),
             "usage": data.get("usage"),
+            "cost_usd": _cost_usd(provider, model, data.get("usage")),
             "trace": [],
+            "citations": [],
             "agent": False,
             "title": db_get_conversation_title(req.conversation_id) if req.conversation_id else None,
         })
@@ -2728,6 +3129,7 @@ async def chat_stream(request: Request, req: ChatRequest):
             yield _sse({
                 "type": "done", "content": content, "reasoning": reasoning,
                 "usage": usage, "model": model, "provider": provider,
+                "cost_usd": _cost_usd(provider, model, usage),
                 "title": title, "agent": False,
             })
         except asyncio.CancelledError:
@@ -3066,6 +3468,48 @@ async def analyze(
         "usage": data_.get("usage"),
         "filename": file.filename,
     })
+
+
+def _file_to_text(data: bytes, filename: str = "upload") -> str:
+    """Best-effort text extraction shared by /api/attach (and formerly /api/analyze):
+    Windows Event Logs (.evtx) are parsed via python-evtx (which needs a path);
+    everything else is decoded as UTF-8 (errors replaced)."""
+    if looks_like_evtx(data):
+        tmp = tempfile.NamedTemporaryFile(suffix=".evtx", delete=False)
+        try:
+            tmp.write(data)
+            tmp.close()
+            return evtx_to_text(tmp.name)
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+    return data.decode("utf-8", errors="replace")
+
+
+@app.post("/api/attach")
+async def attach(file: UploadFile = File(...), max_chars: int = Form(8000)):
+    """Extract readable text from an uploaded document (pdf/txt/csv/json/log/
+    md/evtx…) so it can be attached as conversation context (F10). Returns the
+    extracted content (truncated to `max_chars`) plus basic stats."""
+    data = await file.read()
+    if len(data) > NOVA_MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File too large. Max {NOVA_MAX_UPLOAD_MB} MB.")
+    try:
+        text = _file_to_text(data, file.filename or "")
+    except RuntimeError:
+        raise HTTPException(status_code=500, detail="EVTX parsing not available on this server.")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not extract text from '{file.filename}': {e}")
+    truncated = text[:max(1, min(max_chars, 100000))]
+    return {
+        "filename": file.filename,
+        "content": truncated,
+        "truncated": len(text) > len(truncated),
+        "chars": len(text),
+        "stats": quick_stats(truncated),
+    }
 
 
 # Serve the static frontend; mount at the end so /api/* isn't shadowed.
