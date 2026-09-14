@@ -1,0 +1,540 @@
+================================================================================
+NOVA PROJECT (sallaapam) — OPERATIONS HANDOVER
+================================================================================
+A single-file ops manual for the Sallaapam/NOVA chat POC: how it runs today,
+where the secrets live, how it was built, what each file does, what bugs were
+fixed, and how to restore it from the backup on the Orico SSD.
+
+Saved: /home/dev/handover.txt
+Backup:  /run/media/dev/orico ssd/NOVA_Project_backup_2026-09-06
+Source:  https://github.com/atrixi1337/NOVA_Project  (branch: master)
+Live:    https://nova.terminalflaw.xyz  (Cloudflare named tunnel -> phone :8000)
+
+
+--------------------------------------------------------------------------------
+0. ONE-LINE TL;DR
+--------------------------------------------------------------------------------
+- It is a FastAPI backend (backend.py) that proxies chat to 12 cloud providers
+  and serves a pre-built Vite/React SPA from /static.
+- It runs ON A PHONE in Termux: `uvicorn backend:app --host 0.0.0.0 --port 8000`.
+- The phone is exposed via a Cloudflare named tunnel "nova" -> nova.terminalflaw.xyz.
+- Secrets live in ~/NOVA_Project/.env (gitignored, NEVER in git). The backup has
+  a COPY of that file; treat it like cash.
+- Frontend-only changes = no restart (StaticFiles served per-request); backend
+  (backend.py) changes = restart uvicorn.
+
+
+--------------------------------------------------------------------------------
+1. WHAT THIS THING IS
+--------------------------------------------------------------------------------
+"NOVA POC" / "sallaapam": an Amazon-Nova-flavoured chat frontend + a FastAPI
+backend that normalises 12 OpenAI-compatible providers into one OpenAI-style
+/chat/completions interface. The webapp is a Vite+React (jsx) SPA; the server
+is pure FastAPI + httpx, deps are only fastapi/uvicorn/httpx/multipart/evtx
+(no torch/numpy). SQLite (nova_history.db) stores conversations + a token-usage
+ledger. There is a Settings panel with per-provider model pick, Reasoning &
+Agent toggles, Image generation, a Malayalam language preset, and a "Security
+Mode (NovaSec)" cyber-expert preset.
+
+Two modes of UI behaviour:
+- Normal chat            -> forwards to the selected cloud provider verbatim.
+- Conversation agent      -> provider + model, optional image input, tool round
+                              budget (max_tool_rounds), reasoning_effort.
+- Malayalam mode          -> forces provider=gemini, model=auto + a MALAYALAM
+                              system prompt prepended to messages.
+- Security Mode (NovaSec) -> swaps in a cybersecurity-expert system prompt + a
+                              `<Shield>` icon + an on-screen "NovaSec active"
+                              chip. No backend changes — purely a prompt/icon.
+
+
+--------------------------------------------------------------------------------
+2. LIVE DEPLOYMENT TOPOLOGY
+--------------------------------------------------------------------------------
+Host:        Android phone (observed aarch64; the deploy scripts were written
+             for Snapdragon 8 Gen 1-class devices). ~8 GB RAM, no GPU.
+OS/user:     Termux, user `u0_a318`, home = /data/data/com.termux/files/home
+SSH:        192.168.0.6 port 8022
+            key:  $HOME/.ssh/nova_phone_key   (ed25519)
+            known_hosts: $HOME/.ssh/nova_phone_known_hosts
+            reliable command:
+              ssh -o StrictHostKeyChecking=accept-new \
+                  -o UserKnownHostsFile="$HOME/.ssh/nova_phone_known_hosts" \
+                  -i "$HOME/.ssh/nova_phone_key" -p 8022 u0_a318@192.168.0.6 'bash -s'
+App:         backend.py at $HOME/NOVA_Project (local path above)
+Process:     pid 18044  ->  .venv/bin/python -m uvicorn backend:app --host 0.0.0.0 --port 8000
+App log:     $HOME/NOVA_Project/nova-app.log
+Env source:  `set -a; . "$HOME/NOVA_Project/.env"; set +a` (backend.py uses
+             os.getenv(); it does NOT call load_dotenv()).
+DB:          NOVA_HISTORY_DB = $HOME/NOVA_Project/nova_history.db  (167936 B)
+Tunnel:      Cloudflare named tunnel "nova" (stable) -> nova.terminalflaw.xyz
+             credentials file: $HOME/.cloudflared/d9ec149a-3b54-497a-b915-925c09496b9e.json
+             config:           $HOME/.cloudflared/config.yml  (tunnel nova -> localhost:8000)
+Public probes (all return 200 as of handover):
+             curl https://nova.terminalflaw.xyz/api/health
+             curl https://nova.terminalflaw.xyz/api/usage
+Tunnel URL file: $HOME/tunnel_url.txt (for quick tunnels; not used by the named tunnel)
+
+
+--------------------------------------------------------------------------------
+3. ACCESS MATRIX
+--------------------------------------------------------------------------------
+Local direct : http://localhost:8000            (from the phone itself)
+Local from LAN: http://192.168.0.6:8000          (phone wlan0 IP)
+Public        : https://nova.terminalflaw.xyz    (Cloudflare named tunnel)
+Health        : /api/health                    -> 200
+Usage         : /api/usage                     -> 200  ({total,by_model,by_provider,by_day,first_seen,recent})
+Chat          : /api/chat                      (POST)
+Models        : /api/models                    (GET 925)
+Ollama status : /api/ollama/status,/load,/unload (GET 959/967/982)
+History       : /api/conversations, .../clear  (GET/POST/DELETE 1384..1425)
+Images        : /api/images                    (POST 1746)
+Analyze       : /api/analyze                   (POST 1788)
+Static SPA    : /, /mobile, /usage             (StaticFiles 1896/1901/1907)
+SSH           : u0_a318@192.168.0.6 -p 8022
+
+
+--------------------------------------------------------------------------------
+4. SOURCE CONTROL
+--------------------------------------------------------------------------------
+Remote : https://github.com/atrixi1337/NOVA_Project.git  (= origin)
+Branch : master
+HEAD   : aeca567  "chore: drop Fly.io/Docker deploy artifacts; add README_RESTORE.md..."
+         c1d23ad  "feat(usage): add Usage tab + dashboard"   (was the live bundle)
+         7a02016  "fix(chat): new chats named + Security Mode toggle"
+         6e101e3  "fix(sidebar): md:static in-flow layout"
+         ... (see handover for the full recent log; git log --oneline -12.)
+.gitignore (key lines):
+  .env                 <- secret file, never committed
+  nova_history.db*, nova-test-history.db*   <- runtime data, never committed
+  .venv/, nova_env/, venv/                 <- virtualenv, never committed
+  frontend/node_modules/, frontend/dist/, frontend/.vite/
+  __pycache__/, *.pyc
+  *.bak, .env.bak*
+Status at handover: WORKING TREE CLEAN on dev box.
+
+NOTE on .env/.db on the dev box vs phone:
+  The dev-box checkout had a STALE .env (3878 B, dated Sep 4) and a STALE
+  nova_history.db (36 KB, Aug 31). The PHONE holds the LIVE .env (3779 B) and
+  LIVE nova_history.db (164 KB). The backup was taken from the phone's live
+  copies. => The phone is the single source of truth for secrets + DB; do not
+  trust the dev-box .env.
+
+
+--------------------------------------------------------------------------------
+5. FILE MAP
+--------------------------------------------------------------------------------
+/repo root (tracked)
+  backend.py            FastAPI app: routes + db helpers (sqlite3). THE server.
+  requirements.txt      Python deps (fastapi,uvicorn[http],httpx,pypdf,evtx,
+                        pypdfium2? , Pillow, ... ). NOTE: it pins
+                        `uvicorn[standard]==0.34.0` which pulls `watchfiles`
+                        (Rust/maturin) with NO cp314/aarch64 wheel and no
+                        toolchain on the phone -> build fails. The phone deploy
+                        rewrites requirements.phone.txt by replacing
+                        `uvicorn[standard]==` with `uvicorn==` (plain). See §6.
+  requirements.phone.txt termux phone-tailored deps (generated by phone-deploy.sh).
+  .env.example          NON-secret template (134 lines) — the authoritative var
+                        catalog. Real values live in .env (phone only).
+  README.md             The app's own project README (~13.7 KB).
+  README_RESTORE.md     Restore/handover guide (added aeca567).
+  nova-tunnel.sh        Cloudflare quick-tunnel wrapper (writes tunnel_url.txt).
+  deploy/
+      termux-deploy.sh  Full phone Termux deploy: pkg install -> clone/pull ->
+                        venv+pip -> ensure .env -> register Termux service ->
+                        start uvicorn (nohup fallback) -> wait health ->
+                        wake-lock -> cloudflared quick/named/none tunnel.
+      phone-deploy.sh   Lean redeploy: venv(if missing) -> pip -> .env check ->
+                        pkill uvicorn -> start uvicorn :8000 -> wait health ->
+                        cloudflared quick tunnel -> write tunnel_url.txt ->
+                        termux-wake-lock -> print RESULT SSH/TUNNEL/HEALTH lines.
+  frontend/
+      package.json      Vite+React build, scripts: build=vite build, dev=vite.
+      vite.config.js    root:"/", base:"./", outDir:"../static", emptyOutDir:true
+      index.html        App shell (references the committed bundle index-*.js).
+      public/           mobile.html, usage.html, manifest.webmanifest  (these are
+                        copied into static/ by the build and SURVIVE emptyOutDir
+                        because they live under public/).
+      src/
+          main.jsx        React entry.
+          App.jsx         Tabs (Chat|Usage), send(), chat API call, system-prompt
+                          composition (malayalam/sec), provider mapping, UI chips.
+          api.js          fetch helpers incl. api.usage() (added c1d23ad).
+          components/     Header, Sidebar (collapsible rail, md:static),
+                          Message (with copy button), ReasoningBox, AgentTrace,
+                          Analyzer, SettingsModal, UsageDashboard, Icons(Shield).
+  static/               COMMITTED prebuilt SPA (served by FastAPI). Contains
+                        index.html + assets/index-<hash>.js (+ mobile.html,
+                        usage.html, manifest.webmanifest). Current bundle:
+                        index-DHKFrqEN.js (was index-BfRmMP7i.js).
+
+Excluded from this backup (regenerable / phone-specific runtime logs):
+  __pycache__/, node_modules/ (phone has none anyway),
+  nova-tunnel*.log, nova-tunnel.out, nova-tunnel-stdout.txt, boot-start.log
+The .venv was backed up as .venv.tar.gz (symlinks preserved inside; see §10).
+
+
+--------------------------------------------------------------------------------
+6. HOW IT'S HOSTED ON THE PHONE (START / RESTART)
+--------------------------------------------------------------------------------
+Start (the actual command the phone runs):
+  set -a; . "$HOME/NOVA_Project/.env"; set +a
+  export APP_HOST=0.0.0.0 APP_PORT=8000 NOVA_HISTORY_DB="$HOME/NOVA_Project/nova_history.db"
+  nohup "$HOME/NOVA_Project/.venv/bin/python" -m uvicorn backend:app \
+        --host 0.0.0.0 --port 8000 > "$HOME/NOVA_Project/nova-app.log" 2>&1 &
+
+Restart (backend.py changed):
+  pkill -f 'uvicorn backend:app'   ; sleep 1
+  then re-run the Start block above.
+  (pid was 18044 at handover; the tunnel stays up — do NOT restart it.)
+
+Restart (frontend-only changed, e.g. static/App.jsx):
+  NONE needed. FastAPI serves /static from disk per-request via StaticFiles.
+  A `git pull` (or copy of new static/) is enough — no uvicorn restart.
+
+Keep-alive (Termux): termux-wake-lock  (script runs `termux-wake-lock`).
+Auto-start on boot: install "Termux:Boot" from F-Droid and add a script that runs
+the Start block (see end of termux-deploy.sh).
+
+Health gate used by the deploy scripts:
+  curl -sf http://localhost:8000/api/health   (loop ~40x2s / 50x2s)
+
+
+--------------------------------------------------------------------------------
+7. CLOUDFLARE TUNNEL (the public URL)
+--------------------------------------------------------------------------------
+Mode in use TODAY: named tunnel "nova" -> https://nova.terminalflaw.xyz
+  creds hash shown in docs:  d9ec149a-3b54-497a-b915-925c09496b9e.json  (in ~/.cloudflared/)
+  config at ~/.cloudflared/config.yml routes nova -> http://localhost:8000
+  DO NOT restart the tunnel unless necessary; restarting a QUICK tunnel rotates
+  the public URL, which is why the deploy scripts default to quick but the live
+  box uses a stable named tunnel.
+
+Fallback the scripts can create: quick tunnel via nova-tunnel.sh /
+  `cloudflared tunnel --url http://localhost:8000` -> random *.trycloudflare.com.
+If you ever recreate the tunnel, run from the phone:
+  cloudflared tunnel login
+  cloudflared tunnel create nova
+  cloudflared tunnel route dns nova nova.terminalflaw.xyz
+  (creds file lands in ~/.cloudflared/<UUID>.json; update config.yml tunnel id.)
+
+
+--------------------------------------------------------------------------------
+8. .env VARIABLE CATALOG (names + purpose; VALUES stay in the phone .env, redacted)
+--------------------------------------------------------------------------------
+The authoritative, NON-secret template is .env.example (134 lines). The phone's
+.env (3779 B) sets the live subset. SECRET-flagged vars hold credentials; never
+commit or paste them. Below are the names + meaning. (Backends are OpenAI-
+compatible; *_BASE_URL/*_MODEL/*_MODELS optional, *_API_KEY/_TOKEN secret.)
+
+  DEFAULT_PROVIDER            which provider the UI defaults to (foundry|gemini|nova)
+  NOVA_SANDBOX                path read_file tool may read (agent mode)  -> /home/dev/PROJECT/NOVA_Project
+  APP_HOST / APP_PORT         0.0.0.0 / 8000
+  NOVA_HISTORY_DB             nova_history.db (relative) -> $HOME/NOVA_Project/nova_history.db
+
+Providers (12). For each: <PROVIDER>_API_KEY (SECRET), <PROVIDER>_BASE_URL,
+<PROVIDER>_MODEL, <PROVIDER>_MODELS:
+  NOVA      Amazon Nova                 (NOVA_API_KEY, NOVA_BASE_URL, NOVA_MODEL)
+  FOUNDRY   Azure AI Foundry            (FOUNDRY_API_KEY/BASE_URL/MODEL, FOUNDRY_MODELS)
+  GEMINI    Gemini OpenAI compat        (GEMINI_API_KEY/BASE_URL/MODEL, GEMINI_MODELS)
+  COHERE    Cohere                      (COHERE_API_KEY/BASE_URL/MODEL, COHERE_MODELS)
+  OLLAMA    local Ollama (uncensored)   (OLLAMA_API_KEY=ollama [ignored], OLLAMA_BASE_URL=http://localhost:11434/v1, OLLAMA_MODEL, OLLAMA_MODELS, OLLAMA_IDLE_UNLOAD=300)
+  OPENROUTER OpenRouter free cloud      (OPENROUTER_API_KEY/BASE_URL/MODEL, OPENROUTER_MODELS)
+  HFROUTER   HuggingFace router         (HF_TOKEN, HFROUTER_BASE_URL, HFROUTER_DEFAULT_MODEL, HFROUTER_MODELS)
+  CLOUDFLARE  Cloudflare Workers AI     (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, CLOUDFLARE_BASE_URL, CLOUDFLARE_MODEL, CLOUDFLARE_MODELS)
+  MISTRAL   Mistral AI                  (MISTRAL_API_KEY/BASE_URL/MODEL, MISTRAL_MODELS)
+  UPSTAGE   Upstage AI                  (UPSTAGE_API_KEY/BASE_URL/MODEL, UPSTAGE_MODELS)
+  INCEPTION Inception Labs              (INCEPTION_API_KEY/BASE_URL/MODEL, INCEPTION_MODELS)
+  REQUESTY  Requesty router             (REQUESTY_API_KEY, REQUESTY_BASE_URL, REQUESTY_MODEL, REQUESTY_MODELS)
+  GMI       GMI Cloud / MiniMax         (GMI_API_KEY/BASE_URL/MODEL, GMI_MODELS)
+  AGNES     Agnes AI                    (AGNES_API_KEY/BASE_URL/MODEL, AGNES_MODELS)
+  IFM       IFM AI K2 Horizon           (IFM_API_KEY/BASE_URL/MODEL, IFM_MODELS)
+  REKA      Reka AI (X-Api-Key header)  (REKA_API_KEY/BASE_URL/MODEL, REKA_MODELS)
+  NVIM      NVIDIA NIM Catalog          (NVIM_API_KEY [nvapi-], NVIM_BASE_URL, NVIM_MODEL, NVIM_MODELS)
+  GEMINI_API_KEY_BACKUP  backup Gemini key (failover 403->200)
+  NOVA_ANALYZE_MAX_CHARS / NOVA_MAX_UPLOAD_MB  (image/analyze limits)
+
+Operational secrets kept OUT of the live app but referenced historically:
+  FLY_API_TOKEN, GITHUB_PAT, FLY_APP  — these belonged to the OLD Fly.io deploy
+  (now removed in aeca567). They are NOT needed for the phone/Termux host.
+
+
+--------------------------------------------------------------------------------
+9. BACKEND (backend.py) — ROUTES + DB + ChatRequest
+--------------------------------------------------------------------------------
+Framework: FastAPI. Serves static SPA from /static via app.mount('/', StaticFiles).
+Routes (@app):
+  GET  /api/models                       (925)  list models for a provider
+  GET  /api/health                       (937)  200 health
+  GET  /api/ollama/status                (959)
+  POST /api/ollama/load                  (967)  load a local model
+  POST /api/ollama/unload                (982)
+  GET  /api/conversations                (1384) list / (1390 create)
+  GET  /api/conversations/{cid}          (1400) get
+  POST /api/conversations/{cid}/clear    (1425) clear
+  POST /api/conversations/{cid}/delete   (1408 / 1418)
+  GET  /api/usage                        (1443) returns {total,by_model,by_provider,by_day,first_seen,recent}
+  POST /api/chat                         (1468) main; returns messages + title
+  POST /api/images                       (1746) image generation
+  POST /api/analyze                      (1788) file/usage analysis
+  GET  /  /mobile  /usage                (1896/1901/1907) StaticFiles
+
+DB helpers (sqlite3, nova_history.db):
+  db_usage_summary(provider, model, days)   (1283) -> totals + by_model/provider/by_day
+  db_usage_recent(limit)                    (1364) -> cols: provider,model,role,
+                                   prompt_tokens,completion_tokens,total_tokens,
+                                   reasoning_tokens,created_at
+  db_get_conversation_title(cid)            (1186)  [added during the naming fix]
+  db_save_message(...)                    (1259-1267) auto-titles new convos
+  db_update_conversation_title(...)
+
+ChatRequest(BaseModel) @634 (OpenAI-compatible):
+  messages: List[Dict[str,Any]]
+  model: str = ""
+  agent: bool = False
+  provider: str = ""   # empty -> DEFAULT_PROVIDER
+  (+ conversation_id, api_key, max_tool_rounds, image, reasoning_effort etc.)
+backend.py forwards provider messages VERBATIM to the provider; the system-prompt
+presets (Malayalam / NovaSec) are injected by the FRONTEND (App.jsx send()) and
+are NOT applied server-side.
+
+Provider routing / failover implemented in backend (per provider):
+  - Gemini 403 -> retry with GEMINI_API_KEY_BACKUP.
+  - IFM/K2 retry on transient 400 "missing thinking field" (commit 155ac4b fix).
+  - Reka uses the X-Api-Key header; NVIDIA uses Bearer nvapi- key.
+
+Usage DB reality (handover sample, live on phone):
+  total prompt=16504, completion=10721, total=27316 across 11 calls;
+  by_model count=4, by_provider count=4; recent rows=11.
+
+
+--------------------------------------------------------------------------------
+10. FRONTEND (Vite + React) — FEATURE MAP
+--------------------------------------------------------------------------------
+vite.config.js: root "/", base "./", outDir "../static", emptyOutDir:true.
+The build outputs static/index.html + static/assets/index-<hash>.js. public/
+hold mobile.html, usage.html, manifest.webappconfig and they are copied into
+static/ each build and survive emptyOutDir.
+
+App.jsx:
+  Tabs: Chat | Usage.  (Usage tab mounted c1d23ad.)
+  send() (~L212-325): builds ChatRequest; if malayalamMode prepends
+    MALAYALAM_SYSTEM_PROMPT (L24); if securityMode prepends
+    SECURITY_MODE_SYSTEM_PROMPT (L56). activeProvider = malayalamMode?'gemini':provider
+    (L323). On success it used to ignore the returned title; FIXED (7a02016) ->
+    `setTitle(data.title)` for both agent and non-agent paths.
+  Mode prefs persisted to localStorage: nova_malayalam_mode, nova_security_mode.
+  ChatRequest defaults: model/agent/provider etc.
+
+Components:
+  Sidebar.jsx     collapsible rail, md:static in-flow (6e101e3), md:w-16 rail,
+                  labels hidden via md:hidden when collapsed, Settings in bottom
+                  bar, collapse chevron in header. (Fixes the overlap/spill bugs.)
+  SettingsModal   Provider/Model | Reasoning & Agent | Image Gen | Language Mode
+                  (Malayalam) | Security Mode (NovaSec) | Ollama | API Keys.
+                  Props: open/onClose, providers, defaultProvider, provider,
+                  model, setProvider, setModel, setAgent, setReasoning, agent,
+                  reasoningEffort, ollama, ollamaBusy, ollamaLoad, ollamaUnload,
+                  health, malayalamMode, setMalayalamMode, securityMode,
+                  setSecurityMode.
+  Message.jsx     each assistant/user bubble + a copy button (added).
+  ReasoningBox    collapsible reasoning block.
+  AgentTrace      step trace for agent tool calls.
+  Analyzer        file/usage analysis helper.
+  UsageDashboard  totals + by-model table + by-provider table + recent activity
+                  (api.usage() in api.js; /usage static page also served).
+  Icons.jsx       unified SVG set incl. the `Shield` icon used by NovaSec.
+
+Current served bundle: index-DHKFrqEN.js  (static/index.html references it).
+
+
+--------------------------------------------------------------------------------
+11. BUGS FIXED + VERIFIED LIVE ON THE PHONE
+--------------------------------------------------------------------------------
+a) Conversation naming (7a02016): new chats were not getting a title. Fixed in
+   backend: db_save_message auto-titles via db_get_conversation_title, and
+   /api/chat returns `title` on BOTH agent and non-agent code paths. Frontend
+   App.jsx send() now sets the title from data.title. Verified:
+     POST /api/chat -> {"title":"hi","content":"Hello! How can I help you today?"}
+     nova provider   -> {"title":"hi", ...}
+b) Sidebar overlap / input spill (6e101e3 / 64aae14): Sidebar restored to md:static
+   in-flow so <main> reserves space; input textarea pr-[76px] so text no longer
+   runs under the Send button.
+c) Security Mode (NovaSec) (7a02016/ac0c14c): localStorage nova_security_mode,
+   "Security Mode (NovaSec)" header, on-chip "NovaSec — cybersecurity-expert mode
+   active", Shield icon. No hardcoded "fully unrestricted ... Local Ollama" leak.
+d) Usage dashboard (c1d23ad): api.usage() + /api/usage route + Usage tab + dashboard.
+   Phone DB verified: total 27316 tokens / 11 calls; by_model=4; by_provider=4.
+e) Safe static rebuilds (emptyOutDir:true): mobile.html/usage.html/manifest + assets
+   survive every `npx vite build` because sources live in frontend/public/.
+f) IFM/K2 multi-turn 400 "missing thinking field" retries (155ac4b / a9c0513).
+g) Sandbox path-traversal containment + SQLite FK cascade (e94d358).
+h) Frontend-only deploys need NO uvicorn restart (verified: usage dashboard pull ->
+   served + health 200 with pid unchanged 18044).
+
+Backend.py edits require restart; frontend/static edits do not.
+
+
+--------------------------------------------------------------------------------
+12. BACKUP ON THE ORICO SSD  (the disaster-recovery copy)
+--------------------------------------------------------------------------------
+Path: /run/media/dev/orico ssd/NOVA_Project_backup_2026-09-06   (exFAT, 75 MB)
+Contents:
+  .env                 3779 B   -> the PHONE's live secret file (the dev-box copy
+                                    is stale/untrusted — ignore it).
+  nova_history.db      167936 B -> the PHONE's live history + usage ledger.
+  .venv.tar.gz         ~17.5 MB -> venv as a tarball (see note below).
+  static/              committed prebuilt SPA; bundle index-DHKFrqEN.js.
+  frontend/            full Vite+React source (rebuild: npm install; npx vite build).
+  backend.py + .git + README.md + README_RESTORE.md + deploy/* + requirements*.
+  install.sh / install-service.sh / nova-poc.service (systemd/Linux install; not
+  used by the phone but kept for self-host).
+  nova-app.log         small (4 KB) — phone app log at backup time.
+NOT included (regenerable / noisy): __pycache__, node_modules, the tunnel logs
+(nova-tunnel*.log/out/stdout), boot-start.log.
+
+Why .venv is a tarball: the Orico SSD is exFAT, which cannot store the venv's
+symlinks (Termux aarch64 venv symlinks /data/.../python etc.). Keeping .venv as
+.tz inside the (regular-file on exFAT) a tarball preserves all symlinks; extract
+it on a symlink-capable FS (the phone's Termux storage) to restore the venv.
+For a fresh Termux install, the README_RESTORE.md path is simpler:
+  python -m venv .venv && .venv/bin/pip install -r requirements.phone.txt
+
+
+--------------------------------------------------------------------------------
+13. RESTORE PROCEDURE (from the SSD backup)
+--------------------------------------------------------------------------------
+A) Same-phone restore (fastest):
+   1. cp -a "/run/media/dev/orico ssd/NOVA_Project_backup_2026-09-06/." ~/NOVA_Project/
+   2. cd ~/NOVA_Project && tar -xzf .venv.tar.gz       # restores .venv on exFAT? NO —
+      extract .venv.tar.gz to a symlink-capable dir; simplest: do this on the phone:
+         tar -xzf /path/to/.venv.tar.gz -C ~/NOVA_Project/
+   3. source .env
+   4. nohup ./.venv/bin/python -m uvicorn backend:app --host 0.0.0.0 --port 8000 \
+         > nova-app.log 2>&1 &
+   5. curl http://localhost:8000/api/health  -> 200
+   6. public: https://nova.terminalflaw.xyz/api/health (tunnel unchanged)
+   OR just re-run: bash deploy/termux-deploy.sh   (idempotent: skip-installed,
+   pull, venv-if-missing, ensure .env, restart uvicorn, tunnel, wake-lock).
+
+B) Fresh Termux phone:
+   pkg install python git curl termux-api cloudflared
+   git clone https://github.com/atrixi1337/NOVA_Project.git ~/NOVA_Project
+   cd ~/NOVA_Project
+   cp /path/to/backup/.env ./             # bring the phone's secrets back
+   cp /path/to/backup/nova_history.db ./  # bring history back
+   bash deploy/termux-deploy.sh           # handles venv/pip/.env/tunnel/wake-lock
+
+C) Fresh Linux PC (systemd, Cloudflare named tunnel):
+   git clone ... && cd NOVA_Project
+   cp /backup/.env ./
+   bash install.sh          # prompts for Nova key or reuses .env; makes systemd
+                            # unit nova-poc.service + Cloudflare quick tunnel.
+   # adapt WorkingDirectory / EnvironmentFile / ExecStart paths in nova-poc.service.
+
+Restart rule-of-thumb: changed backend.py -> restart uvicorn; changed static/frontend
+-> just reload the files (no restart).
+
+
+--------------------------------------------------------------------------------
+14. CURRENT LIVE STATE SNAPSHOT (at handover)
+--------------------------------------------------------------------------------
+git HEAD:        aeca567 (clean) ; bundle index-DHKFrqEN.js
+uvicorn:         pid 18044 on phone :8000  (no restart needed since c1d23ad)
+/api/health:     200
+/api/usage:      200  (total 27316 tokens / 11 calls; by_model=4; by_provider=4)
+tunnel:          named "nova" -> https://nova.terminalflaw.xyz  (NOT restarted)
+SSH host:        u0_a318@192.168.0.6:8022  key ~/.ssh/nova_phone_key
+Orico SSD backup: /run/media/dev/orico ssd/NOVA_Project_backup_2026-09-06  (verified)
+
+Fly.io artifacts removed (commit aeca567): fly.toml, deploy-fly.sh, deploy.sh,
+Dockerfile, docker-compose.yml, .dockerignore — confirmed absent from both repo
+and SSD backup. Live service unaffected (health 200, pid 18044 unchanged).
+
+
+--------------------------------------------------------------------------------
+15. CAVEATS / THINGS YOU ABSOLUTELY SHOULD NOT DO
+--------------------------------------------------------------------------------
+- DO NOT try to run an uncensored LLM locally on this phone: SM8350-class SoC,
+  no GPU, no ollama/llama.cpp installed, ~392 MB free RAM headroom; even the
+  smallest uncensored GGUF (~2.7B) + uvicorn exceeds available memory. The only
+  "local/uncensored" provider wired up is Ollama (localhost:11434) — it is NOT
+  installed on the phone. All other providers are cloud and apply their own
+  safety filters regardless of system prompt (so NovaSec is a bounded cyber-
+  expert persona, not an uncensor).
+- DO NOT defeat cloud-provider safety filters via prompt — they fire at the API
+  layer, not the model layer.
+- DO NOT restart the Cloudflare named tunnel unless you must; a quick tunnel
+  restart rotates the public URL.
+- DO NOT `cat .env` in terminals/logs. The backup .env is secret; the on-disk
+  .env on the phone is gitignored.
+- .venv in the backup is a tarball (symlinks); it restores cleanly on the phone
+  (Linux FS) but not as a live tree on this exFAT SSD.
+- backend.py changes => restart uvicorn. static/frontend changes => no restart.
+================================================================================
+END OF HANDOVER
+================================================================================
+
+--------------------------------------------------------------------------------
+16. ADDENDUM — 2026-09-07 (everything added since §§0–15 were written)
+--------------------------------------------------------------------------------
+§§0–15 still apply (topology, tunnel, restart rules, secrets, DO-NOTs). What
+changed since:
+
+NEW RUNTIME FEATURES (all live on the phone):
+  - Streaming chat: POST /api/chat/stream (SSE) + Stop button; 80ms throttled
+    UI rendering; live reasoning panel (reasoning_content -> "Thinking..." box)
+  - Arena tab: one prompt -> up to 4 providers side-by-side, latency + "first"
+    badge; ephemeral (never saved to history)
+  - Regenerate (retry) + edit-and-resend: ChatRequest.regenerate=true drops the
+    last user+assistant turn from history before re-saving (no duplicates)
+  - Web search: the 🌐 Web chip runs a 2-round tool loop (research preset).
+    While ON the default model switches to nova/nova-2-lite-v1 (function
+    calling); OFF = inception/mercury-2. tool_web_search prefers you.com
+    (YOU_API_KEY) else DuckDuckGo. Providers that 400 on the tools param are
+    retried once without tools. Gemini quirk: empty reply after tool results
+    triggers one nudge pass.
+  - Agent tools: web_search / web_fetch / http_headers; presets
+    core|research|security via ChatRequest.tools_preset (NovaSec -> security)
+  - Image gen: /api/images auto-chains gemini -> cloudflare -> foundry
+    (cloudflare creds in .env are PLACEHOLDERS — gemini path is the live one)
+  - AUTH: NOVA_AUTH_PASSPHRASE in .env ("name:secret,name2:secret2" or one bare
+    value) locks /api/* (except /api/auth/login + /api/health). 30-day signed
+    cookie via lock screen; X-Nova-Token header for scripts; 5/min login limit;
+    CORS wildcard removed. CURRENT PASSPHRASE: see NOVA_AUTH_PASSPHRASE in
+    ~/NOVA_Project/.env (owner token is also the admin/restart key)
+  - INFERENCE GATEWAY: OpenAI-compatible /v1/models + /v1/chat/completions
+    (SSE stream + non-stream, temperature/max_tokens/top_p passthrough).
+    Model format "provider/model". Keys sk-nova-* minted in the Gateway tab
+    (sha256-stored, raw shown once), revocable, usage attributed per key as
+    actor "gw:<name>". NOVA_PUBLIC_URL pins the advertised base URL
+    (= https://nova.terminalflaw.xyz).
+  - PWA: installable (manifest + public/sw.js, offline shell); Add to Home
+    Screen from the browser. Mobile header/tabs tuned for 360px.
+
+NEW OPS:
+  - Watchdog: deploy/phone-watchdog.sh — 30s /api/health checks, restart after
+    2 consecutive failures, copytruncate log rotation >5MB, optional
+    WATCHDOG_NTFY push. RUNNING on the phone (pid in ~/NOVA_Project/.watchdog.pid)
+    and appended to ~/.termux/boot/start-nova.sh. Kill-test verified: 57s
+    unattended recovery. POST /api/admin/restart (owner only) bounces uvicorn
+    via the watchdog.
+  - Backups: deploy/devbox-backup.sh on the DEV BOX pulls a consistent SQLite
+    snapshot + .env from the phone into ~/NOVA_Project_backups/<date>/
+    (cron 04:15, 14-day rotation). First backup verified 2026-09-06.
+  - .env divergence FIXED 2026-09-06: boot script sources
+    ~/NOVA_Project/.env now (was ~/.env); both files synced. ONLY EDIT
+    ~/NOVA_PROJECT/.ENV, then: cp ~/NOVA_Project/.env ~/.env
+  - Tests: python3 -m pytest tests/ -q  (24 tests; providers faked, no network)
+
+NEW/CHANGED ENV VARS (full catalog in .env.example):
+  NOVA_AUTH_PASSPHRASE   NOVA_AUTH_SECRET       NOVA_PUBLIC_URL
+  YOU_API_KEY            NOVA_RATE_LIMIT_PER_MIN   NOVA_DAILY_TOKEN_CAP
+  WATCHDOG_NTFY (optional push)                GEMINI_IMAGE_MODEL (optional)
+
+LIVE STATE 2026-09-07: git HEAD 0256552+ (see git log); uvicorn restarts on
+backend deploys (check pid: pgrep -f "[u]vicorn backend:app"); watchdog pid in
+.watchdog.pid; health 200; auth LOCKED; bundle hash via
+curl -s https://nova.terminalflaw.xyz/ | grep -o 'index-[^"]*\.js'
+
+ALL §15 CAVEATS STILL APPLY.
+================================================================================
