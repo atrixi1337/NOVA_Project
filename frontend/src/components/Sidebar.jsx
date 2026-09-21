@@ -61,6 +61,7 @@ export default function Sidebar({
   onClose,
   collapsed = false,
   onToggleCollapse,
+  historyRestricted = false,
 }) {
   const [hovered, setHovered] = useState(null)
   const [renaming, setRenaming] = useState(null)
@@ -215,8 +216,17 @@ export default function Sidebar({
                       d="M8 10h.01M12 10h.01M16 10h.01M9 14h.01M13 14h.01M17 14h.01M21 8a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h14a2 2 0 002-2V8z" />
                     </svg>
                 </div>
-                <p className="text-sm text-muted">No conversations yet.</p>
-                <p className="text-[12px] text-muted/60 mt-1">Start a new chat to begin.</p>
+                {historyRestricted ? (
+                  <>
+                    <p className="text-sm text-text2">History is admin-only</p>
+                    <p className="text-[12px] text-muted/60 mt-1">A general token can't list conversations. Ask for an admin token to browse history.</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-muted">No conversations yet.</p>
+                    <p className="text-[12px] text-muted/60 mt-1">Start a new chat to begin.</p>
+                  </>
+                )}
               </>
             )}
             {isRail && <span className="text-[10px] text-muted">—</span>}

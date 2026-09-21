@@ -36,6 +36,18 @@ function CopyBtn({ text, label = 'copy' }) {
   )
 }
 
+// Shown in place of admin-only management sections for non-admin (general) tokens.
+function LockedSection({ title, children }) {
+  return (
+    <div className="rounded-xl border border-border bg-panel2 p-4 space-y-2">
+      <div className="font-semibold text-text text-[14px] flex items-center gap-2">
+        <span aria-hidden>🔒</span>{title}
+      </div>
+      <div className="text-[12px] text-muted/80">{children}</div>
+    </div>
+  )
+}
+
 // Inference Gateway tab: mint/revoke API keys for the OpenAI-compatible /v1
 // endpoints and track per-key usage — so agents (OpenCode, Aider, curl, any
 // OpenAI client) can run inference through every provider.
@@ -55,12 +67,18 @@ export default function GatewayTab({ health }) {
   // Advertised base URL: the configured NOVA_PUBLIC_URL when set (so snippets
   // always carry the public domain), otherwise the address you're browsing from.
   const origin = publicBase || window.location.origin
+  // owner == admin (see backend _is_admin). Hides key names + mint/revoke from
+  // general tokens entirely.
+  const admin = health?.is_admin === true
 
   const load = async () => {
     setBusy(true)
     try {
-      const [keyRes, modelRes] = await Promise.all([api.gatewayKeys(), api.models().catch(() => ({}))])
-      setKeys(keyRes.keys || [])
+      const [keyRes, modelRes] = await Promise.all([
+        admin ? api.gatewayKeys() : Promise.resolve({ keys: [] }),
+        api.models().catch(() => ({})),
+      ])
+      setKeys(keyRes?.keys || [])
       setProviders(modelRes.providers || {})
       setPublicBase(modelRes.public_base_url || '')
     } catch (e) { setErr(e.message) } finally { setBusy(false) }
@@ -205,7 +223,8 @@ export default function GatewayTab({ health }) {
         ))}
       </div>
 
-      {/* create key */}
+      {/* create key — owner/admin only */}
+      {admin ? (
       <div className="rounded-xl border border-border bg-panel2 p-4 space-y-3">
         <div className="font-semibold text-text text-[14px]">Create API key</div>
         <div className="flex gap-2">
@@ -270,8 +289,14 @@ export default function GatewayTab({ health }) {
           </div>
         )}
       </div>
+      ) : (
+        <LockedSection title="Create API key">
+          Admin token required to mint gateway API keys.
+        </LockedSection>
+      )}
 
-      {/* keys table */}
+      {/* keys table — owner/admin only */}
+      {admin ? (
       <div className="rounded-xl border border-border bg-panel2 p-4 space-y-3">
         <div className="font-semibold text-text text-[14px]">API keys ({keys.length})</div>
         {keys.length === 0 ? (
@@ -325,6 +350,11 @@ export default function GatewayTab({ health }) {
           Gateway calls are recorded per key in the usage ledger (actor <code className="px-0.5 rounded bg-black">gw:&lt;name&gt;</code>).
         </div>
       </div>
+      ) : (
+        <LockedSection title="API keys">
+          Admin token required to list and revoke gateway API keys.
+        </LockedSection>
+      )}
     </div>
   )
 }

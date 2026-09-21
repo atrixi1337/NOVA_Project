@@ -11,7 +11,9 @@ export class AuthError extends Error {
 async function toError(r, fallback) {
   let detail = fallback
   try { const d = await r.json(); detail = d.detail || detail } catch {}
-  return r.status === 401 ? new AuthError(detail) : new Error(detail)
+  const err = r.status === 401 ? new AuthError(detail) : new Error(detail)
+  err.status = r.status
+  return err
 }
 
 async function jget(path) {

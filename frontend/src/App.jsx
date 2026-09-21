@@ -65,6 +65,9 @@ export default function App() {
   const [conversations, setConversations] = useState([])
   const [currentId, setCurrentId] = useState(null)
   const [conversationsLoaded, setConversationsLoaded] = useState(false)
+  // true when the auth token is non-admin (general) and GET /api/conversations
+  // 403'd — history browsing is owner/admin-only.
+  const [historyRestricted, setHistoryRestricted] = useState(false)
 
   // ── provider / model / mode state ──
   const [providers, setProviders] = useState({})
@@ -116,9 +119,23 @@ export default function App() {
     })
     return true
   }
-  const onAttachFiles = (e) => {
-    addFiles(e.target.files)
+  // Combined attach handler for the single upload button: images go through
+  // addFiles (image_url blocks), documents are attached as full conversation
+  // context (F10). Replaces the old separate image-only + document-only inputs.
+  const onAttachAll = async (e) => {
+    const files = Array.from(e.target.files || [])
     e.target.value = '' // allow re-selecting the same file
+    if (!files.length) return
+    const images = files.filter((f) => f.type.startsWith('image/'))
+    const docs = files.filter((f) => !f.type.startsWith('image/'))
+    if (images.length) addFiles(images)
+    for (const file of docs) {
+      try {
+        const res = await api.attach(file, 8000)
+        const block = `[Attached ${file.name}]\n${res.content}${res.truncated ? '\n…(truncated)' : ''}`
+        setInput((cur) => (cur ? cur + '\n\n' : '') + block)
+      } catch (e2) { setErr(e2.message) }
+    }
   }
   // Screenshots can also be pasted (Ctrl/Cmd+V) or dragged onto the chat.
   const onPasteInto = (e) => {
@@ -298,6 +315,7 @@ export default function App() {
       setConversations(data.conversations || [])
     } catch (e) {
       if (e?.name === 'AuthError') setLocked(true)
+      else if (e?.status === 403) setHistoryRestricted(true) // general token: admin-only history
       else console.error('Failed to load conversations', e)
     } finally {
       setConversationsLoaded(true)
@@ -408,20 +426,6 @@ export default function App() {
         URL.revokeObjectURL(url)
       }
     } catch (e) { setErr(e.message) }
-  }
-
-  // F10: doc-as-context. Extracts text from an uploaded doc/pdf/csv/… and
-  // appends it to the input as reviewable context before sending.
-  const docInputRef = useRef(null)
-  const onAttachDoc = async (e) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    try {
-      const res = await api.attach(file, 8000)
-      const block = `[Attached ${file.name}]\n${res.content}${res.truncated ? '\n…(truncated)' : ''}`
-      setInput((cur) => (cur ? cur + '\n\n' : '') + block)
-    } catch (e2) { setErr(e2.message) }
   }
 
   // ── chat ──
@@ -756,6 +760,8 @@ export default function App() {
         onClose={() => setSidebarOpen(false)}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+        admin={health?.is_admin}
+        historyRestricted={historyRestricted}
       />
 
       {/* ── Main ── */}
@@ -940,17 +946,10 @@ export default function App() {
                 <div className="relative">
                   <input
                     type="file"
-                    accept="image/*"
                     multiple
+                    accept="image/*,.txt,.pdf,.csv,.json,.log,.md,.text"
                     ref={fileInputRef}
-                    onChange={onAttachFiles}
-                    className="hidden"
-                  />
-                  <input
-                    type="file"
-                    accept=".txt,.pdf,.csv,.json,.log,.md,.text"
-                    ref={docInputRef}
-                    onChange={onAttachDoc}
+                    onChange={onAttachAll}
                     className="hidden"
                   />
                   <button
@@ -958,18 +957,9 @@ export default function App() {
                     onClick={() => fileInputRef.current?.click()}
                     disabled={busy}
                     className="absolute left-2 bottom-2.5 p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors z-10"
-                    title="Attach image"
+                    title="Attach image or document"
                   >
                     <AttachmentPaperclip className="w-5 h-5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => docInputRef.current?.click()}
-                    disabled={busy}
-                    className="absolute left-9 bottom-2.5 p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors z-10"
-                    title="Attach document as context (txt/pdf/csv/json/log/md)"
-                  >
-                    <span className="w-5 h-5 flex items-center justify-center text-[15px]">📄</span>
                   </button>
                   <textarea
                     ref={textareaRef}

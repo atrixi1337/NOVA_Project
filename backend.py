@@ -1128,21 +1128,26 @@ def _valid_session(token: str) -> Optional[str]:
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     if _auth_enabled() and request.url.path.startswith("/api/"):
-        if request.url.path not in ("/api/auth/login", "/api/health"):
-            actor = None
-            cookie = request.cookies.get(AUTH_COOKIE, "")
-            if cookie:
-                actor = _valid_session(cookie)
-            if actor is None:
-                header = request.headers.get("x-nova-token", "").strip()
-                if header:
-                    actor = AUTH_TOKENS.get(header)
-            if actor is None:
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "Locked. Enter the passphrase to unlock."},
-                )
+        # /api/health and /api/auth/login stay public (uptime pings + the lock
+        # screen), but we still attach the actor when a caller supplies a token
+        # or session cookie — so /api/health can report is_admin without
+        # requiring auth.
+        public = request.url.path in ("/api/auth/login", "/api/health")
+        actor = None
+        cookie = request.cookies.get(AUTH_COOKIE, "")
+        if cookie:
+            actor = _valid_session(cookie)
+        if actor is None:
+            header = request.headers.get("x-nova-token", "").strip()
+            if header:
+                actor = AUTH_TOKENS.get(header)
+        if actor is not None:
             request.state.actor = actor
+        elif not public:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Locked. Enter the passphrase to unlock."},
+            )
     return await call_next(request)
 
 
@@ -1269,6 +1274,11 @@ def _require_owner(request: Request) -> None:
         raise HTTPException(403, "Owner token required to manage gateway keys.")
 
 
+def _is_admin(request: Request) -> bool:
+    """True for an authenticated 'owner' actor (the admin role)."""
+    return _auth_enabled() and getattr(request.state, "actor", "") == "owner"
+
+
 def _enforce_gateway_key_limits(key: Dict[str, Any]) -> None:
     """Per-key enforcement for gateway keys (actor 'gw:<name>'):
        - rate_limit_per_min overrides the global NOVA_RATE_LIMIT_PER_MIN when set (>0)
@@ -1342,7 +1352,9 @@ async def create_gateway_key(request: Request, body: GatewayKeyCreate):
 
 @app.get("/api/gateway/keys")
 async def list_gateway_keys(request: Request):
-    """List gateway keys (never returns raw keys) with per-key usage."""
+    """List gateway keys (never returns raw keys) with per-key usage.
+    Owner/admin only — key names are not leaked to general tokens."""
+    _require_owner(request)
     conn = _db()
     rows = conn.execute(
         """SELECT k.key_hash, k.name, k.key_prefix, k.created_at, k.last_used_at, k.enabled,
@@ -1793,7 +1805,7 @@ async def get_models():
 
 
 @app.get("/api/health")
-async def health():
+async def health(request: Request):
     return {
         "status": "ok",
         "providers": {
@@ -1808,6 +1820,10 @@ async def health():
         # Gemini backup-key status (supports the rate-limit failover in call_llm).
         "gemini_keys": len(GEMINI_API_KEYS),
         "gemini_backup_configured": bool(GEMINI_API_KEY_BACKUP),
+        # Current actor (from x-nova-token / session cookie) + admin flag
+        # (owner). Public health still returns empty/False when unauthenticated.
+        "actor": getattr(request.state, "actor", ""),
+        "is_admin": _is_admin(request),
     }
 
 
@@ -2605,7 +2621,11 @@ def db_usage_recent(limit: int = 50) -> List[Dict[str, Any]]:
 @app.get("/api/conversations")
 async def list_conversations(request: Request):
     """Return all (non-archived) conversations, most recent + pinned first.
-    ?archived=1 also includes archived conversations (which the UI hides by default)."""
+    ?archived=1 also includes archived conversations (which the UI hides by default).
+    Browsing the full history is owner/admin-only; a general token gets 403 so it
+    cannot enumerate other users' conversations."""
+    if _auth_enabled() and getattr(request.state, "actor", "") != "owner":
+        raise HTTPException(403, "History browsing is owner/admin only.")
     include_archived = request.query_params.get("archived") == "1"
     return {"conversations": db_list_conversations(include_archived)}
 

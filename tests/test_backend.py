@@ -673,3 +673,46 @@ def test_infron_provider_wiring(client):
     })
     assert r.status_code == 400
     assert "Infron" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# RBAC: owner/admin-only access to gateway key management + conversation history
+# ---------------------------------------------------------------------------
+def test_health_reports_actor_and_is_admin(client):
+    # auth off (client fixture) -> public health returns no actor / not admin
+    h = client.get("/api/health").json()
+    assert h.get("is_admin") is False
+    assert h.get("actor", "") == ""
+
+    # general (non-owner) token -> actor set, is_admin False
+    backend.AUTH_TOKENS = {"general-pass": "alice"}
+    h = client.get("/api/health", headers={"X-Nova-Token": "general-pass"}).json()
+    assert h["is_admin"] is False and h["actor"] == "alice"
+
+    # owner token -> is_admin True
+    backend.AUTH_TOKENS = {"owner-pass": "owner"}
+    h = client.get("/api/health", headers={"X-Nova-Token": "owner-pass"}).json()
+    assert h["is_admin"] is True and h["actor"] == "owner"
+
+
+def test_general_token_cannot_list_history_or_keys(client):
+    backend.AUTH_TOKENS = {"general-pass": "alice"}  # non-owner = general
+    H = {"X-Nova-Token": "general-pass"}
+    assert client.get("/api/conversations", headers=H).status_code == 403
+    assert client.get("/api/gateway/keys", headers=H).status_code == 403
+
+
+def test_owner_can_list_history_and_keys(client):
+    backend.AUTH_TOKENS = {"owner-pass": "owner"}
+    H = {"X-Nova-Token": "owner-pass"}
+    assert client.get("/api/conversations", headers=H).status_code == 200
+    assert client.get("/api/gateway/keys", headers=H).status_code == 200
+
+
+def test_history_list_open_when_auth_disabled_closed_when_general(client):
+    # auth disabled -> the list gate is a no-op (open)
+    assert client.get("/api/conversations").status_code == 200
+    backend.AUTH_TOKENS = {"gp": "alice"}
+    # general token -> 403 (cannot enumerate history)
+    assert client.get("/api/conversations", headers={"X-Nova-Token": "gp"}).status_code == 403
+
