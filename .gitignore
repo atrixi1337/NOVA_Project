@@ -21,3 +21,4 @@ frontend/.vite/
 # never commit backups or .env variants
 *.bak
 .env.bak*
+.nova_tokens
