@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useMemo } from 'react'
 import { ChevronLeft, ChevronRight, Search } from './Icons.jsx'
 
 function formatTime(ts) {
@@ -62,6 +62,17 @@ export default function Sidebar({
   collapsed = false,
   onToggleCollapse,
   historyRestricted = false,
+  // F13: server-side message search. `search` is null until the query is long
+  // enough to be worth a request, and stays null when the caller can't search
+  // (a general token gets 403 — see `searchDenied`).
+  search = null,
+  searchDenied = false,
+  searchLoading = false,
+  onSearchQuery,
+  onFork,
+  onDiff,
+  onExportArchive,
+  onImportArchive,
 }) {
   const [hovered, setHovered] = useState(null)
   const [renaming, setRenaming] = useState(null)
@@ -70,6 +81,8 @@ export default function Sidebar({
   const [confirmDel, setConfirmDel] = useState(null)
   const confirmTimer = useRef(null)
   const inputRef = useRef(null)
+  const archiveInputRef = useRef(null)
+  const [showBackup, setShowBackup] = useState(false)
 
   useEffect(() => {
     if (renaming) {
@@ -79,6 +92,10 @@ export default function Sidebar({
   }, [renaming])
 
   useEffect(() => () => clearTimeout(confirmTimer.current), [])
+
+  // When full-text results are available they replace the local filter, since
+  // they are strictly better (they see inside every message, not just titles).
+  const useFullText = Array.isArray(search) && search.length > 0
 
   const startRename = (cid, title) => {
     setRenaming(cid)
@@ -109,12 +126,22 @@ export default function Sidebar({
   const sorted = [...conversations].sort((a, b) => b.updated_at - a.updated_at)
 
   const q = filter.trim().toLowerCase()
-  const visible = q
-    ? sorted.filter((c) =>
-        (c.title || '').toLowerCase().includes(q) ||
-        (c.preview || '').toLowerCase().includes(q) ||
-        (c.provider || '').toLowerCase().includes(q))
-    : sorted
+  // F13: hits carry the matching conversation so the list can still render
+  // titles/provider dots, plus a snippet of the matching message.
+  const hitsByConv = useMemo(() => {
+    const m = {}
+    for (const h of search || []) m[h.conversation_id] = h
+    return m
+  }, [search])
+
+  const visible = useFullText
+    ? sorted.filter((c) => hitsByConv[c.id])
+    : q
+      ? sorted.filter((c) =>
+          (c.title || '').toLowerCase().includes(q) ||
+          (c.preview || '').toLowerCase().includes(q) ||
+          (c.provider || '').toLowerCase().includes(q))
+      : sorted
 
   // Group the filtered list by recency bucket (order preserved within group).
   const groups = []
@@ -196,11 +223,27 @@ export default function Sidebar({
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
             <input
               value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Search chats…"
+              onChange={(e) => {
+                setFilter(e.target.value)
+                // F13: lift the query so App can run the debounced server search.
+                onSearchQuery?.(e.target.value)
+              }}
+              placeholder="Search chats & messages…"
               className="w-full bg-panel2 text-text text-[12px] pl-8 pr-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2 placeholder:text-muted/60"
             />
+            {searchLoading && (
+              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-muted">
+                searching…
+              </span>
+            )}
           </div>
+        )}
+        {/* F13: a general token can't search (403 — it would expose every
+            user's history). Say so rather than silently showing nothing. */}
+        {!isRail && searchDenied && q && (
+          <p className="mt-1.5 px-1 text-[11px] text-err/80">
+            Search is admin-only — a general token can&apos;t read other users&apos; history.
+          </p>
         )}
       </div>
 
@@ -316,7 +359,14 @@ export default function Sidebar({
                                 ))}
                               </div>
                             ) : null}
-                            {c.preview ? (
+                            {/* F13: show WHY this conversation matched — the
+                                matching message, not the conversation preview. */}
+                            {hitsByConv[c.id] ? (
+                              <div className="text-[12px] text-text2 truncate mt-0.5 mb-1 pl-3">
+                                <span className="text-accent2/90">{hitsByConv[c.id].role}:</span>{' '}
+                                {truncate(hitsByConv[c.id].snippet, 64)}
+                              </div>
+                            ) : c.preview ? (
                               <div className="text-[12px] text-muted truncate mt-0.5 mb-1 pl-3">
                                 {truncate(c.preview, 48)}
                               </div>
@@ -347,6 +397,23 @@ export default function Sidebar({
                             <span className="w-4 h-4 flex items-center justify-center text-[13px]">{c.archived ? '📤' : '🗄️'}</span>
                           </button>
                           <button
+                            onClick={(e) => { e.stopPropagation(); onFork?.(c.id) }}
+                            className="p-1 rounded-md text-muted hover:text-accent2 hover:bg-panel transition-colors"
+                            title="Fork: copy this conversation into a new branch"
+                          >
+                            <span className="w-4 h-4 flex items-center justify-center text-[13px]">⑂</span>
+                          </button>
+                          {/* F22: only meaningful when this fork has a parent. */}
+                          {c.parent_id && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onDiff?.(c.id, c.parent_id) }}
+                              className="p-1 rounded-md text-muted hover:text-accent hover:bg-panel transition-colors"
+                              title="Compare this fork against its parent"
+                            >
+                              <span className="w-4 h-4 flex items-center justify-center text-[13px]">⇄</span>
+                            </button>
+                          )}
+                          <button
                             onClick={(e) => { e.stopPropagation(); onExport?.(c.id, 'md') }}
                             className="p-1 rounded-md text-muted hover:text-text hover:bg-panel transition-colors"
                             title="Export as Markdown"
@@ -375,8 +442,53 @@ export default function Sidebar({
         )}
       </nav>
 
+      {/* F21: whole-archive backup / restore (admin-only) */}
+      {admin && !isRail && showBackup && (
+        <div className="px-3 py-2 border-t border-border space-y-1.5">
+          <p className="text-[11px] text-muted">
+            Backup every conversation, persona and schedule as one file.
+          </p>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => onExportArchive?.()}
+              className="flex-1 px-2 py-1 text-[11px] rounded-lg border border-border text-text hover:bg-panel2 transition-colors"
+            >
+              Export all
+            </button>
+            <button
+              onClick={() => archiveInputRef.current?.click()}
+              className="flex-1 px-2 py-1 text-[11px] rounded-lg border border-border text-text hover:bg-panel2 transition-colors"
+            >
+              Restore
+            </button>
+          </div>
+          <input
+            ref={archiveInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) onImportArchive?.(f)
+              e.target.value = '' // allow re-picking the same file
+            }}
+          />
+        </div>
+      )}
+
       {/* bottom: settings */}
       <div className="p-2 border-t border-border">
+        {admin && (
+          <button
+            onClick={() => setShowBackup((v) => !v)}
+            className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] text-muted hover:text-text hover:bg-panel2 rounded-xl transition-colors mb-1
+              ${isRail ? 'justify-center' : 'justify-start'}`}
+            title="Backup & restore"
+          >
+            <span className="w-4 h-4 flex items-center justify-center text-[13px]">{showBackup ? '▾' : '💾'}</span>
+            <span className={isRail ? 'md:hidden' : ''}>Backup</span>
+          </button>
+        )}
         <button
           onClick={() => { onSettings(); onClose?.() }}
           className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] text-muted hover:text-text hover:bg-panel2 rounded-xl transition-colors

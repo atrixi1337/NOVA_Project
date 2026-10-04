@@ -716,3 +716,26 @@ def test_history_list_open_when_auth_disabled_closed_when_general(client):
     # general token -> 403 (cannot enumerate history)
     assert client.get("/api/conversations", headers={"X-Nova-Token": "gp"}).status_code == 403
 
+
+def test_openapi_and_docs_disabled(client):
+    # Auto-generated schema/UI removed: no route map handed to attackers.
+    assert client.get("/openapi.json").status_code == 404
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+
+
+def test_gateway_unauthenticated_attempts_are_rate_limited(client):
+    # Closes the sk-nova-* key-guess oracle: no key -> 401 (rejected), but capped
+    # per source IP so it can't be driven at edge speed. Hammer /v1/* bare.
+    saved_limit = backend.NOVA_GATEWAY_IP_RATE_LIMIT
+    backend.NOVA_GATEWAY_IP_RATE_LIMIT = 3
+    backend._GATEWAY_IP_HITS.clear()
+    try:
+        codes = [client.get("/v1/models").status_code for _ in range(5)]
+        assert codes[:3] == [401, 401, 401]   # still rejected, not a bypass
+        assert codes[3] == 429                 # throttled after 3 attempts / 60s
+        assert client.post("/v1/chat/completions", json={"messages": []}).status_code == 429
+    finally:
+        backend.NOVA_GATEWAY_IP_RATE_LIMIT = saved_limit
+        backend._GATEWAY_IP_HITS.clear()
+

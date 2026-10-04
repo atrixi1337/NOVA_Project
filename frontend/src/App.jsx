@@ -13,6 +13,8 @@ import SettingsModal from './components/SettingsModal.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
 import Arena from './components/Arena.jsx'
 import GatewayTab from './components/GatewayTab.jsx'
+import BenchTab from './components/BenchTab.jsx'
+import ScheduleTab from './components/ScheduleTab.jsx'
 import LockScreen from './components/LockScreen.jsx'
 import { composePersonaMessages } from './personas.js'
 import { Sparkle, AttachmentPaperclip, Remove, SendSolid, Shield, ArrowDown, Globe } from './components/Icons.jsx'
@@ -45,7 +47,7 @@ const SECURITY_QUICK_PROMPTS = [
 ]
 
 // Tab ids (order matters for the tab bar).
-const TABS = ['chat', 'arena', 'gateway', 'analyzer', 'usage', 'host']
+const TABS = ['chat', 'arena', 'gateway', 'analyzer', 'bench', 'schedules', 'usage', 'host']
 
 // NovaSec persona prompt also lives in personas.js.
 
@@ -68,6 +70,10 @@ export default function App() {
   // true when the auth token is non-admin (general) and GET /api/conversations
   // 403'd — history browsing is owner/admin-only.
   const [historyRestricted, setHistoryRestricted] = useState(false)
+  // ── F13/F14/F21/F22 state ──
+  const [searchQuery, setSearchQuery] = useState('')
+  const [diffState, setDiffState] = useState(null)
+  const [archiveNote, setArchiveNote] = useState('')
 
   // ── provider / model / mode state ──
   const [providers, setProviders] = useState({})
@@ -76,14 +82,32 @@ export default function App() {
   const [model, setModel] = useState('auto')
   const [agent, setAgent] = useState(false)
   const [reasoningEffort, setReasoning] = useState('')
-  // Agent tool preset: core | research | security. NovaSec overrides to
-  // 'security' at send time (persona-aware tools).
+  // Agent tool preset: core | research | recall | security. NovaSec overrides
+  // to 'security' at send time (persona-aware tools).
   const [toolsPreset, setToolsPreset] = useState(() => {
     try {
       const t = localStorage.getItem('nova_tools_preset')
-      return ['core', 'research', 'security'].includes(t) ? t : 'research'
+      return ['core', 'research', 'recall', 'security'].includes(t) ? t : 'research'
     } catch { return 'research' }
   })
+  // F20: ask before the agent runs a side-effecting tool (write_file, web_fetch).
+  // Off by default — it costs an extra round trip per risky call.
+  const [requireApproval, setRequireApproval] = useState(() => {
+    try { return localStorage.getItem('nova_require_approval') === 'true' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('nova_require_approval', String(requireApproval)) } catch {}
+  }, [requireApproval])
+  // F18: let the backend summarize a runaway transcript. Only meaningful when
+  // NOVA_COMPACT_CHARS is set server-side; harmless otherwise.
+  const [compactLongContext, setCompactLongContext] = useState(() => {
+    try { return localStorage.getItem('nova_compact') === 'true' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('nova_compact', String(compactLongContext)) } catch {}
+  }, [compactLongContext])
+  // Tool calls the backend is currently blocked on (F20), awaiting a decision.
+  const [pendingTools, setPendingTools] = useState(null)
   // Web search toggle: gives the model the research tools in normal chat by
   // running a mini tool loop (search → answer, 2 rounds max). Needs a model
   // with function calling; unsupported models just answer without searching.
@@ -428,6 +452,95 @@ export default function App() {
     } catch (e) { setErr(e.message) }
   }
 
+  function downloadJson(obj, filename) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // ── F13: server-side full-text search ──
+  // Debounced so typing doesn't fire a request per keystroke. The sidebar's own
+  // title filter still runs locally for non-owners and for short queries.
+  const [searchHits, setSearchHits] = useState(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchDenied, setSearchDenied] = useState(false)
+
+  useEffect(() => {
+    const q = (searchQuery || '').trim()
+    if (q.length < 3 || historyRestricted) {
+      setSearchHits(null)
+      setSearchLoading(false)
+      return
+    }
+    let cancelled = false
+    setSearchLoading(true)
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.search(q)
+        if (cancelled) return
+        setSearchHits(res.results || [])
+        setSearchDenied(false)
+      } catch (e) {
+        if (cancelled) return
+        // 403 = a general token; fall back to the local title filter silently.
+        setSearchDenied(e?.status === 403)
+        if (e?.status !== 403) setErr(e.message)
+        setSearchHits(null)
+      } finally {
+        if (!cancelled) setSearchLoading(false)
+      }
+    }, 250)
+    return () => { cancelled = true; clearTimeout(t); setSearchLoading(false) }
+  }, [searchQuery, historyRestricted])
+
+  // ── F14: fork a conversation ──
+  const forkConversation = async (cid, { atMessageId = null, title = '' } = {}) => {
+    try {
+      const fork = await api.forkConversation(cid, { atMessageId, title })
+      setConversations((cs) => [fork, ...cs])
+      setCurrentId(fork.id)
+      const full = await api.getConversation(fork.id)
+      setMessages(full.messages || [])
+      setErr('')
+    } catch (e) { setErr(e.message) }
+  }
+
+  // ── F22: compare the open conversation against another (fork vs parent) ──
+  // `currentId`/`currentConversation` are read fresh at call time, so this must
+  // stay a function rather than a value computed during render.
+  const diffWith = async (otherId) => {
+    const here = currentId
+    if (!here || !otherId) return
+    try {
+      const d = await api.diffConversations(here, otherId)
+      setDiffState(d)
+    } catch (e) { setErr(e.message) }
+  }
+
+  // ── F21: whole-archive backup / restore ──
+  const exportArchive = async (includeUsage = false) => {
+    try {
+      const archive = await api.backupExport(includeUsage)
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+      downloadJson(archive, `nova-archive-${stamp}.json`)
+      setArchiveNote(`Exported ${archive.conversations.length} conversations, ${archive.messages.length} messages.`)
+    } catch (e) { setErr(e.message) }
+  }
+
+  const importArchive = async (file) => {
+    try {
+      const archive = JSON.parse(await file.text())
+      const res = await api.backupImport(archive, 'merge')
+      const i = res.imported
+      setArchiveNote(`Restored ${i.conversations} conversations, ${i.messages} messages, ${i.personas} personas.`)
+      loadConversations()
+    } catch (e) { setErr(e.message) }
+  }
+
   // ── chat ──
   // Throttled live flush: streaming deltas and reasoning arrive faster than we
   // want to re-render markdown, so buffer and paint at most every ~80ms.
@@ -470,6 +583,10 @@ export default function App() {
       // Persona-aware agent tools (NovaSec → recon set with the HTTP header probe).
       tools_preset: useAgent ? (securityMode ? 'security' : (agent ? toolsPreset : 'research')) : undefined,
       regenerate: regenerate || undefined,
+      // F20: halt on a side-effecting tool and wait for the user to confirm.
+      require_approval: useAgent && requireApproval ? true : undefined,
+      // F18: compact a long transcript instead of resending it verbatim.
+      compact: compactLongContext ? true : undefined,
     }
     const finalizeMeta = (ev) => {
       setLastMeta({
@@ -480,6 +597,7 @@ export default function App() {
         usage: ev.usage,
         cost_usd: ev.cost_usd,
         citations: ev.citations || [],
+        compaction: ev.compaction || null,
       })
       setConversations((cs) => cs.map((c) =>
         c.id === cid ? { ...c, preview: ev.content || '', title: ev.title || c.title } : c
@@ -565,9 +683,17 @@ export default function App() {
       const ctl = new AbortController()
       abortRef.current = ctl
       const data = await api.chat(payload, ctl.signal)
+      // F20: the loop halted for approval. Show the calls and stop; the user
+      // decides, and approving re-posts the same turn with approved_tools.
+      if (data?.status === 'awaiting_approval') {
+        setPendingTools({ tools: data.pending_tools || [], baseMessages, cid })
+        setMessages(baseMessages)
+        setLastMeta((m) => ({ ...m, trace: data.trace || [] }))
+        return
+      }
       setMessages([...baseMessages, { role: 'assistant', content: data.content, reasoning: data.reasoning, citations: data.citations }])
       finalizeMeta(data)
-      setLastMeta((m) => ({ ...m, trace: data.trace || [] }))
+      setLastMeta((m) => ({ ...m, trace: data.trace || [], compaction: data.compaction }))
     } catch (e) {
       if (e?.name === 'AbortError') setMessages(baseMessages)
       else if (e?.name === 'AuthError') setLocked(true)
@@ -584,6 +710,46 @@ export default function App() {
     } finally {
       setBusy(false)
       abortRef.current = null
+    }
+  }
+
+  // ── F20: approve or deny a halted tool call ──
+  // Approving replays the identical turn with approved_tools set, so the server
+  // resumes the loop from the same point rather than starting over.
+  const resolvePendingTools = async (approved) => {
+    if (!pendingTools) return
+    const { tools, baseMessages, cid } = pendingTools
+    setPendingTools(null)
+    const granted = approved
+      ? tools.map((t) => ({ id: t.id, name: t.name, arguments: t.arguments }))
+      : []
+    setMessages([...baseMessages, { role: 'assistant', content: approved ? '' : 'Denied.' }])
+    setBusy(true)
+    try {
+      const data = await api.chat({
+        messages: baseMessages,
+        model: activeModel,
+        agent: true,
+        provider: activeProvider,
+        reasoning_effort: reasoningEffort || undefined,
+        conversation_id: cid,
+        api_key: getUIKey(activeProvider) || undefined,
+        tools_preset: securityMode ? 'security' : toolsPreset,
+        require_approval: requireApproval ? true : undefined,
+        approved_tools: granted,
+      })
+      if (data?.status === 'awaiting_approval') {
+        setPendingTools({ tools: data.pending_tools || [], baseMessages, cid })
+        setMessages(baseMessages)
+      } else {
+        setMessages([...baseMessages, { role: 'assistant', content: data.content, reasoning: data.reasoning, citations: data.citations }])
+        finalizeMeta(data)
+        setLastMeta((m) => ({ ...m, trace: data.trace || [] }))
+      }
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -696,7 +862,7 @@ export default function App() {
     items.push({ section: 'Actions', hint: 'new', label: 'New chat', run: () => { startNewChat() } })
     items.push({ section: 'Modes', hint: securityMode ? 'on' : 'off', label: securityMode ? 'Disable NovaSec' : 'Enable NovaSec', run: () => setSecurityMode((s) => !s) })
     items.push({ section: 'Modes', hint: malayalamMode ? 'on' : 'off', label: malayalamMode ? 'Disable Malayalam mode' : 'Enable Malayalam mode', run: () => setMalayalamMode((m) => !m) })
-    ;[['chat', 'Chat'], ['arena', 'Arena'], ['gateway', 'Gateway'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage'], ['host', 'Host']].forEach(([id, label]) =>
+    ;[['chat', 'Chat'], ['arena', 'Arena'], ['gateway', 'Gateway'], ['analyzer', 'Log Analyzer'], ['bench', 'Benchmark'], ['schedules', 'Schedules'], ['usage', 'Usage'], ['host', 'Host']].forEach(([id, label]) =>
       items.push({ section: 'Navigate', hint: 'tab', label: `Go to ${label}`, run: () => setTab(id) }))
     Object.entries(providers).forEach(([pid, p]) =>
       items.push({ section: 'Providers', hint: 'switch', label: `Provider: ${p.label}`, run: () => switchProvider(pid) }))
@@ -704,6 +870,15 @@ export default function App() {
       items.push({ section: 'Conversations', hint: c.provider || '', label: c.title || 'Untitled', run: () => openConversation(c.id) }))
     return items
   }, [conversations, providers, securityMode, malayalamMode, startNewChat, openConversation, switchProvider])
+
+  // ── F22: fork-vs-parent diff viewer ──
+  // Auto-dismiss so the panel doesn't sit over the transcript indefinitely.
+  const diff = diffState
+  useEffect(() => {
+    if (!diff) return
+    const t = setTimeout(() => setDiffState(null), 20000)
+    return () => clearTimeout(t)
+  }, [diff])
 
   // ── provider/model label for header display ──
   // Precedence: Malayalam mode routes through Gemini (multilingual, strong
@@ -754,6 +929,8 @@ export default function App() {
         onTogglePin={togglePin}
         onToggleArchive={toggleArchive}
         onExport={exportConversation}
+        onFork={forkConversation}
+        onDiff={diffWith}
         onSettings={() => setShowSettings(true)}
         loading={{ new: busy }}
         open={sidebarOpen}
@@ -762,6 +939,12 @@ export default function App() {
         onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
         admin={health?.is_admin}
         historyRestricted={historyRestricted}
+        search={searchHits}
+        searchDenied={searchDenied}
+        searchLoading={searchLoading}
+        onSearchQuery={setSearchQuery}
+        onExportArchive={() => exportArchive(false)}
+        onImportArchive={importArchive}
       />
 
       {/* ── Main ── */}
@@ -885,6 +1068,45 @@ export default function App() {
               )}
               {lastMeta?.reasoning && <div className="mx-3 sm:mx-6"><ReasoningBox reasoning={lastMeta.reasoning} /></div>}
               {lastMeta?.trace?.length > 0 && <div className="mx-3 sm:mx-6"><AgentTrace trace={lastMeta.trace} /></div>}
+
+              {/* F18: tell the user the transcript was summarized, so a jump in
+                  the answer isn't silently explained by lost context. */}
+              {lastMeta?.compaction?.compacted && (
+                <div className="mx-3 sm:mx-6 mb-2 px-3 py-1.5 rounded-lg border border-accent2/30 bg-accent2/5 text-[11px] text-accent2">
+                  Context compacted: {lastMeta.compaction.summarized_messages} earlier messages summarized
+                  ({lastMeta.compaction.chars_before} → {lastMeta.compaction.chars_after} chars).
+                  The full transcript is still saved.
+                </div>
+              )}
+
+              {/* F20: the agent wants to run a side-effecting tool. Show exactly
+                  what it intends to do and let the user decide. */}
+              {pendingTools && (
+                <div className="mx-3 sm:mx-6 mb-2 rounded-xl border border-err/40 bg-err/5 p-3">
+                  <p className="text-[12px] text-text font-medium mb-1.5">
+                    The agent wants to run {pendingTools.tools.length === 1 ? 'a tool' : `${pendingTools.tools.length} tools`}:
+                  </p>
+                  {pendingTools.tools.map((t, i) => (
+                    <pre key={i} className="mb-1.5 font-mono text-[11px] text-muted whitespace-pre-wrap break-all">
+                      ▶ {t.name}({JSON.stringify(t.arguments)})
+                    </pre>
+                  ))}
+                  <div className="flex gap-2 mt-2">
+                    <button
+                      onClick={() => resolvePendingTools(true)}
+                      className="px-2.5 py-1 text-[12px] rounded-lg bg-accent2 text-bg font-medium"
+                    >
+                      Approve &amp; run
+                    </button>
+                    <button
+                      onClick={() => resolvePendingTools(false)}
+                      className="px-2.5 py-1 text-[12px] rounded-lg border border-border text-muted hover:text-text"
+                    >
+                      Deny
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             {/* jump to latest (shown only when scrolled away from the bottom) */}
             {!atBottom && messages.length > 0 && (
@@ -1048,6 +1270,22 @@ export default function App() {
           />
         ) : tab === 'gateway' ? (
           <GatewayTab health={health} />
+        ) : tab === 'bench' ? (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <BenchTab health={health} providers={providers} />
+          </div>
+        ) : tab === 'schedules' ? (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <ScheduleTab
+              providers={providers}
+              onOpenConversation={async (cid) => {
+                const full = await api.getConversation(cid)
+                setCurrentId(cid)
+                setMessages(full.messages || [])
+                setTab('chat')
+              }}
+            />
+          </div>
         ) : tab === 'usage' ? (
           <div className="flex-1 min-h-0 overflow-y-auto">
             <UsageDashboard />
@@ -1062,6 +1300,54 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* F21: last backup/restore result */}
+      {archiveNote && (
+        <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 rounded-lg bg-panel2 border border-border text-[12px] text-text shadow-lg">
+          {archiveNote}
+          <button
+            onClick={() => setArchiveNote('')}
+            className="ml-2 text-muted hover:text-text"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* F22: fork-vs-parent comparison */}
+      {diff && (
+        <div className="fixed inset-x-2 bottom-2 sm:inset-x-auto sm:right-4 sm:w-[26rem] z-40 max-h-[50vh] overflow-y-auto rounded-xl border border-border bg-panel shadow-xl p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] font-medium text-text">Conversation diff</span>
+            <button onClick={() => setDiffState(null)} className="text-muted hover:text-text text-[12px]">✕</button>
+          </div>
+          <p className="text-[11px] text-muted">
+            {diff.shared_prefix} shared message(s)
+            {diff.identical ? ' — the two are identical.' : ' before diverging.'}
+          </p>
+          {!diff.identical && (
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <p className="text-[11px] text-accent2 mb-1 truncate">{diff.a.title}</p>
+                {diff.a_only.map((m, i) => (
+                  <p key={i} className="text-[11px] text-muted mb-1 line-clamp-3">
+                    <span className="opacity-60">{m.role}:</span> {m.content}
+                  </p>
+                ))}
+              </div>
+              <div>
+                <p className="text-[11px] text-accent mb-1 truncate">{diff.b.title}</p>
+                {diff.b_only.map((m, i) => (
+                  <p key={i} className="text-[11px] text-muted mb-1 line-clamp-3">
+                    <span className="opacity-60">{m.role}:</span> {m.content}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Command palette (Ctrl/Cmd+K) */}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={paletteItems} />
@@ -1082,6 +1368,10 @@ export default function App() {
         setReasoning={setReasoning}
         toolsPreset={toolsPreset}
         setToolsPreset={setToolsPreset}
+        requireApproval={requireApproval}
+        setRequireApproval={setRequireApproval}
+        compactLongContext={compactLongContext}
+        setCompactLongContext={setCompactLongContext}
         ollama={ollama}
         ollamaBusy={ollamaBusy}
         ollamaLoad={ollamaLoad}

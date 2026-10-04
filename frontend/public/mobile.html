@@ -44,8 +44,10 @@
       <div style="font-size:14px;font-weight:600">Endpoints</div>
       <div class="summary" style="margin-top:8px">
         GET <code>/api/health</code>, <code>/api/models</code>, <code>/mobile</code> are public.<br>
-        POST/PUT/DELETE are gated by <code>Authorization: Bearer &lt;NOVA_ADMIN_KEY&gt;</code>
-        (the key lives in the phone’s <code>~/.env</code>, never shipped to the browser).
+        POST/PUT/DELETE on <code>/api/*</code> require a signed session (unlock via the lock
+        screen; scripts send <code>X-Nova-Token</code>). The inference gateway
+        <code>/v1/*</code> uses its own <code>Bearer sk-nova-…</code> keys (minted in the
+        Gateway tab). Secrets stay server-side only — never sent to the browser.
       </div>
     </div>
   </main>

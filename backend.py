@@ -10,6 +10,7 @@ This is a PROOF OF CONCEPT built for a local lab. It intentionally keeps the
 API key server-side only (never shipped to the browser).
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ import secrets
 import sqlite3
 import uuid
 import xml.etree.ElementTree as ET
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -411,6 +413,22 @@ PUBLIC_BASE_URL = os.getenv("NOVA_PUBLIC_URL", "").strip().rstrip("/")
 # A persistent volume or bind-mount can hold this file across container restarts.
 HISTORY_DB = os.getenv("NOVA_HISTORY_DB", str(Path(__file__).parent / "nova_history.db"))
 HISTORY_AUTO_TITLE_FROM_FIRST = True  # generate a title from the first user msg
+# SQLite FTS5 availability, probed once by init_db(). False on minimal builds
+# that omit FTS5; message search then degrades to a LIKE scan.
+FTS_AVAILABLE = False
+# F15 ordered cross-provider failover chain ("" = failover disabled).
+NOVA_FAILOVER = [p.strip() for p in os.getenv("NOVA_FAILOVER", "").split(",") if p.strip()]
+# F18 outbound context compaction: when the rendered transcript exceeds this many
+# characters the oldest turns are summarized instead of resent verbatim. 0 = off.
+NOVA_COMPACT_CHARS = int(os.getenv("NOVA_COMPACT_CHARS", "0"))
+# F20 tools that halt the agent loop for human approval before running.
+NOVA_APPROVAL_TOOLS = {
+    t.strip() for t in os.getenv("NOVA_APPROVAL_TOOLS", "write_file").split(",") if t.strip()
+}
+# F16 how many providers a benchmark run may hit at once (a phone is not a host).
+NOVA_BENCH_CONCURRENCY = max(1, int(os.getenv("NOVA_BENCH_CONCURRENCY", "3")))
+# F19 how often the scheduler checks for due schedules.
+NOVA_SCHED_TICK_S = max(15, int(os.getenv("NOVA_SCHED_TICK_S", "60")))
 
 import tempfile
 
@@ -616,6 +634,21 @@ TOOLS: List[Dict[str, Any]] = [
                     },
                 },
                 "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall",
+            "description": "Search earlier conversations stored on this device. Use it when the user refers to something discussed before ('what did we decide about the gateway keys?', 'remind me what the last log analysis found') instead of guessing or asking them to re-paste.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Keywords to search for in past messages."},
+                    "limit": {"type": "integer", "description": "Max matching messages to return (1-10, default 5)."},
+                },
+                "required": ["query"],
             },
         },
     },
@@ -1011,6 +1044,7 @@ TOOL_IMPLS = {
     "web_search": tool_web_search,
     "web_fetch": tool_web_fetch,
     "http_headers": tool_http_headers,
+    # F17: registered below, once tool_recall is defined.
 }
 
 # Named agent-tool presets ('tools_preset' on ChatRequest). Unknown/None sends
@@ -1019,7 +1053,50 @@ TOOL_IMPLS = {
 _PRESET_CORE = ["get_time", "calculate", "read_file"]
 _PRESET_RESEARCH = _PRESET_CORE + ["web_search", "web_fetch", "list_workspace", "write_file"]
 _PRESET_SECURITY = _PRESET_CORE + ["web_search", "web_fetch", "http_headers", "list_workspace", "write_file"]
-TOOL_PRESETS = {"core": _PRESET_CORE, "research": _PRESET_RESEARCH, "security": _PRESET_SECURITY}
+TOOL_PRESETS = {
+    "core": _PRESET_CORE,
+    "research": _PRESET_RESEARCH,
+    "security": _PRESET_SECURITY,
+    # F17: research + the agent's own history, so it can recall prior decisions.
+    "recall": list(_PRESET_RESEARCH) + ["recall"],
+}
+
+# F20: tools whose side effects warrant a human confirmation step. The env var
+# overrides this; these are the defaults because they mutate state or make
+# outbound requests. Pure reads (get_time/calculate/read_file/list_workspace/
+# web_search/recall) are intentionally excluded.
+DEFAULT_APPROVAL_TOOLS = {"write_file", "web_fetch"}
+
+
+def tool_recall(query: str, limit: int = 5) -> Dict[str, Any]:
+    """F17: search this device's own conversation history.
+
+    Lets the agent answer "what did we decide about X last week?" without the
+    user re-pasting context. Returns structured text plus citations so the UI
+    reuses the existing Sources block.
+    """
+    hits = db_search_messages(query, limit=limit)
+    if not hits:
+        return {"text": f"No past messages matched '{query}'.", "citations": []}
+    lines: List[str] = []
+    cites: List[Dict[str, Any]] = []
+    for h in hits:
+        title = h["conversation_title"] or "(conversation)"
+        lines.append(f"[{title}] {h['role']}: {h['snippet']}")
+        cites.append({
+            "title": title,
+            "url": f"#/conversation/{h['conversation_id']}",
+            "conversation_id": h["conversation_id"],
+        })
+    return {
+        "text": "Relevant earlier messages:\n" + "\n".join(lines),
+        "citations": cites,
+    }
+
+
+# tool_recall is declared after this table (it needs db_search_messages), so
+# register it here rather than above, where the name would not exist yet.
+TOOL_IMPLS["recall"] = tool_recall
 
 
 def _tools_for_preset(preset: Optional[str]) -> List[Dict[str, Any]]:
@@ -1062,12 +1139,25 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None  # save messages to this conversation
     tools_preset: Optional[str] = None  # agent mode: core | research | security (default: all tools)
     regenerate: bool = False  # drop the last user+assistant turn from history before re-saving
+    # F18 compact the outbound transcript when it exceeds NOVA_COMPACT_CHARS.
+    compact: bool = False
+    # F20 halt before running side-effecting tools and ask the client to confirm.
+    require_approval: bool = False
+    # Tool calls the client already approved, as {name, arguments, id} entries.
+    approved_tools: Optional[List[Dict[str, Any]]] = None
 
 
 # ----------------------------------------------------------------------------
 # App
 # ----------------------------------------------------------------------------
-app = FastAPI(title="AI POC", version="2.0.0")
+# Auto-generated OpenAPI/JSON + Swagger UI (/docs, /redoc, /openapi.json) are
+# disabled: this is an authenticated lab, not a public SDK target, and publishing
+# the full request schema + every route (incl. admin/restart) just hands attackers
+# a map. The SPA reads provider/model lists from the custom /api/models endpoint,
+# not from here, so nothing user-facing breaks.
+app = FastAPI(title="AI POC", version="2.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+# The scheduler lives with the other route handlers rather than up here, so the
+# lifespan handler is attached after it is defined (see end of file).
 # The SPA is served same-origin by this app, so cross-origin requests are not
 # needed by the UI — the old allow-all CORS only helped strangers' pages call
 # the API with our cookies/keys. (Use a dev proxy if you ever need CORS.)
@@ -1100,7 +1190,15 @@ _LOGIN_FAILS: Dict[str, List[float]] = {}
 # Shared deployments: one tester's runaway loop must not burn everyone's keys.
 NOVA_RATE_LIMIT_PER_MIN = int(os.getenv("NOVA_RATE_LIMIT_PER_MIN", "60"))  # 0 = off
 NOVA_DAILY_TOKEN_CAP = int(os.getenv("NOVA_DAILY_TOKEN_CAP", "0"))        # 0 = off
+# Per-source-IP cap for UNAUTHENTICATED /v1/* attempts (no/invalid bearer key).
+# The per-key limiter (_enforce_gateway_key_limits) only runs AFTER a key parses,
+# so without this an attacker enumerates sk-nova-* keys at the edge rate. Cloudflare
+# terminates TLS and sets cf-connecting-ip; it is NOT trustable from x-forwarded-for
+# (spoofable), so we trust cf-connecting-ip (set by the edge) and fall back to the
+# direct peer only when there is no proxy. 0 = off.
+NOVA_GATEWAY_IP_RATE_LIMIT = int(os.getenv("NOVA_GATEWAY_IP_RATE_LIMIT", "60"))  # 0 = off
 _ACTOR_HITS: Dict[str, List[float]] = {}
+_GATEWAY_IP_HITS: Dict[str, List[float]] = {}
 
 
 def _auth_enabled() -> bool:
@@ -1279,6 +1377,35 @@ def _is_admin(request: Request) -> bool:
     return _auth_enabled() and getattr(request.state, "actor", "") == "owner"
 
 
+def _client_ip(request: Request) -> str:
+    """Source IP for rate accounting. Trusts cf-connecting-ip (set by the
+    Cloudflare edge, unspoofable by the client) and falls back to the direct
+    peer only when there is no proxy in front."""
+    cip = request.headers.get("cf-connecting-ip", "").strip()
+    if cip:
+        return cip.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _gateway_ip_rate_limit(request: Request) -> None:
+    """Cap UNAUTHENTICATED /v1/* attempts per source IP — closes the sk-nova-*
+    key-guess oracle (the per-key limiter only fires once a key parses)."""
+    if NOVA_GATEWAY_IP_RATE_LIMIT <= 0:
+        return
+    now = time.time()
+    ip = _client_ip(request)
+    hits = [t for t in _GATEWAY_IP_HITS.get(ip, []) if now - t < 60]
+    if len(hits) >= NOVA_GATEWAY_IP_RATE_LIMIT:
+        raise HTTPException(
+            429,
+            f"Rate limit reached for this source IP ({NOVA_GATEWAY_IP_RATE_LIMIT}/min). Slow down.",
+        )
+    hits.append(now)
+    _GATEWAY_IP_HITS[ip] = hits
+
+
 def _enforce_gateway_key_limits(key: Dict[str, Any]) -> None:
     """Per-key enforcement for gateway keys (actor 'gw:<name>'):
        - rate_limit_per_min overrides the global NOVA_RATE_LIMIT_PER_MIN when set (>0)
@@ -1408,6 +1535,7 @@ async def v1_models(request: Request):
     """OpenAI-format model list across all providers, as 'provider/model'."""
     key = _gateway_key_from_request(request)
     if not key:
+        _gateway_ip_rate_limit(request)
         raise HTTPException(401, "Invalid or missing gateway API key.")
     data = []
     for pid, p in PROVIDERS.items():
@@ -1467,6 +1595,7 @@ async def v1_chat_completions(request: Request, body: V1ChatCompletion):
     name resolves on the default provider."""
     key = _gateway_key_from_request(request)
     if not key:
+        _gateway_ip_rate_limit(request)
         raise HTTPException(401, "Invalid or missing gateway API key.")
     actor = f"gw:{key['name']}"
     _enforce_gateway_key_limits(key)
@@ -1504,9 +1633,15 @@ async def v1_chat_completions(request: Request, body: V1ChatCompletion):
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
         )
 
-    data = await call_llm(body.messages, model, api_key, provider, None, None, extra)
-    db_record_usage(provider, model, data.get("usage"), actor)
+    data, served_by = await call_llm_failover(
+        body.messages, model, api_key, provider, None, None, extra
+    )
+    # F15: record usage against the provider that actually served it, but keep
+    # the caller's requested "provider/model" id in `model` so clients that
+    # round-trip the id keep working. The actual provider rides along in `nova`.
+    db_record_usage(served_by, model, data.get("usage"), actor)
     data["model"] = requested
+    data["nova_served_by"] = served_by
     return JSONResponse(data)
 
 
@@ -1688,6 +1823,69 @@ async def call_llm(
 
     # Out of attempts: report the last observed problem cleanly.
     raise HTTPException(status_code=502, detail=last_err or "LLM request failed.")
+
+
+async def call_llm_failover(
+    messages: List[Dict[str, Any]],
+    model: str,
+    api_key: str,
+    provider: str,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    reasoning_effort: Optional[str] = None,
+    extra_params: Optional[Dict[str, Any]] = None,
+) -> tuple:
+    """F15: call the requested provider, falling back to alternates on outage.
+
+    A phone on a home tunnel loses connectivity and providers 429 constantly, so
+    a single dead upstream shouldn't end the turn. Only *transient* failures
+    trigger a fallback — 429, 5xx, and network errors. A 400/401/403 means the
+    request or the key is wrong; retrying it elsewhere just burns the fallback
+    provider's quota and hides the real error, so those surface immediately.
+
+    Returns (parsed_response, provider_actually_used).
+    """
+    chain = [provider] + [p for p in NOVA_FAILOVER if p != provider and p in PROVIDERS]
+    if not api_key:
+        # UI-supplied key: only meaningful for the requested provider.
+        chain = [provider]
+    last_detail: Optional[str] = None
+    last_status = 502
+    for pid in chain:
+        key = api_key if pid == provider else _provider_key(pid)
+        if not key:
+            continue  # alternate not configured — skip silently
+        extra = {k: v for k, v in (extra_params or {}).items() if v is not None}
+        try:
+            if extra:
+                data = await call_llm(
+                    messages,
+                    _resolve_model(pid, model if pid == provider else ""),
+                    key, pid, tools, reasoning_effort, extra,
+                )
+            else:
+                # Called without the optional passthrough dict so a caller (or a
+                # test) monkeypatching call_llm with the historical 6-arg
+                # signature keeps working.
+                data = await call_llm(
+                    messages,
+                    _resolve_model(pid, model if pid == provider else ""),
+                    key, pid, tools, reasoning_effort,
+                )
+            return data, pid
+        except HTTPException as e:
+            transient = e.status_code == 429 or e.status_code >= 500
+            if not transient:
+                raise
+            last_detail, last_status = e.detail, e.status_code
+            logger.warning("failover: %s failed (%s) — trying next provider", pid, e.status_code)
+        except httpx.HTTPError as e:
+            last_detail, last_status = f"Network error contacting {pid}: {e}", 502
+            logger.warning("failover: %s network error — trying next provider", pid)
+    raise HTTPException(
+        status_code=last_status if last_status >= 400 else 502,
+        detail=(f"All configured providers failed. Last error: {last_detail}"
+                if last_detail else "No configured provider could serve this request."),
+    )
 
 
 async def call_cohere(
@@ -2130,6 +2328,7 @@ def init_db() -> None:
     #   - conversation organization: folder / tags / pinned / archived + persona
     #   - usage ledger: cost_usd (POC pricing surfaced in the Usage tab)
     #   - gateway keys: per-key scope + daily quota + custom rate limit
+    #   - conversation lineage (F14 fork / F22 diff): parent + fork point
     for _tbl, _col, _decl in (
         ("conversations", "folder", "TEXT NOT NULL DEFAULT ''"),
         ("conversations", "tags", "TEXT NOT NULL DEFAULT '[]'"),
@@ -2140,6 +2339,9 @@ def init_db() -> None:
         ("gateway_keys", "scope", "TEXT NOT NULL DEFAULT 'gateway'"),
         ("gateway_keys", "daily_quota_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("gateway_keys", "rate_limit_per_min", "INTEGER"),
+        ("conversations", "parent_id", "TEXT"),
+        ("conversations", "forked_at_message_id", "INTEGER"),
+        ("conversations", "origin", "TEXT NOT NULL DEFAULT 'chat'"),
     ):
         try:
             conn.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_decl}")
@@ -2159,8 +2361,135 @@ def init_db() -> None:
         )
         """
     )
+    # F13 full-text search over message bodies. FTS5 ships with CPython's
+    # sqlite3 on every platform we target, but a few minimal Android/Termux
+    # builds are compiled without it — probe once and fall back to LIKE so
+    # search degrades instead of crashing the app on boot.
+    global FTS_AVAILABLE
+    try:
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                content,
+                conversation_id UNINDEXED,
+                role UNINDEXED,
+                tokenize = 'unicode61 remove_diacritics 2'
+            )
+            """
+        )
+        FTS_AVAILABLE = True
+    except sqlite3.OperationalError:
+        FTS_AVAILABLE = False
+        logger.warning(
+            "SQLite built without FTS5 — /api/conversations/search falls back to LIKE."
+        )
+    if FTS_AVAILABLE:
+        # Backfill messages written before the index existed (or while FTS5 was
+        # unavailable). Rebuilding from the authoritative table is idempotent.
+        _fts_rebuild(conn)
+
+    # F19 scheduled prompts — interval-driven; results land in a conversation.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schedules (
+            id           TEXT PRIMARY KEY,
+            name         TEXT NOT NULL,
+            prompt       TEXT NOT NULL,
+            provider     TEXT NOT NULL DEFAULT '',
+            model        TEXT NOT NULL DEFAULT '',
+            every_min    INTEGER NOT NULL DEFAULT 60,
+            enabled      INTEGER NOT NULL DEFAULT 1,
+            tools_preset TEXT,
+            last_run_at  REAL,
+            last_status  TEXT,
+            last_error   TEXT,
+            last_conv_id TEXT,
+            created_at   REAL NOT NULL
+        )
+        """
+    )
+    # F16 benchmark results — one row per (run, provider) cell.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bench_runs (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            label             TEXT NOT NULL DEFAULT '',
+            suite             TEXT NOT NULL,
+            provider          TEXT NOT NULL,
+            model             TEXT NOT NULL,
+            status            TEXT NOT NULL,
+            latency_ms        INTEGER,
+            prompt_tokens     INTEGER,
+            completion_tokens INTEGER,
+            total_tokens      INTEGER,
+            cost_usd          REAL,
+            error             TEXT,
+            output_excerpt    TEXT,
+            actor             TEXT,
+            created_at        REAL NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_bench_created ON bench_runs(created_at DESC)")
     conn.commit()
     conn.close()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start the background scheduler alongside the app.
+
+    Kept deliberately tiny: one task, cancelled cleanly on shutdown so a test
+    client or a `pkill` restart doesn't leave an orphan loop running.
+    """
+    global _sched_task
+    _sched_task = asyncio.create_task(_scheduler_loop())
+    try:
+        yield
+    finally:
+        if _sched_task is not None and not _sched_task.done():
+            _sched_task.cancel()
+            try:
+                await _sched_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        _sched_task = None
+
+
+def _fts_rebuild(conn: sqlite3.Connection) -> None:
+    """Rebuild the FTS index from the messages table (idempotent)."""
+    try:
+        conn.execute("DELETE FROM messages_fts")
+        conn.execute(
+            "INSERT INTO messages_fts(rowid, content, conversation_id, role) "
+            "SELECT id, content, conversation_id, role FROM messages"
+        )
+    except sqlite3.OperationalError as e:  # pragma: no cover - defensive
+        logger.warning("FTS rebuild skipped: %s", e)
+
+
+def _fts_index_message(conn: sqlite3.Connection, row_id: int, content: str,
+                       cid: str, role: str) -> None:
+    """Add one message to the FTS index (no-op when FTS5 is unavailable)."""
+    if not FTS_AVAILABLE:
+        return
+    try:
+        conn.execute(
+            "INSERT INTO messages_fts(rowid, content, conversation_id, role) VALUES (?, ?, ?, ?)",
+            (row_id, content, cid, role),
+        )
+    except sqlite3.OperationalError as e:  # pragma: no cover - defensive
+        logger.warning("FTS insert failed: %s", e)
+
+
+def _fts_drop_conversation(conn: sqlite3.Connection, cid: str) -> None:
+    """Remove every indexed message of a conversation from the FTS index."""
+    if not FTS_AVAILABLE:
+        return
+    try:
+        conn.execute("DELETE FROM messages_fts WHERE conversation_id = ?", (cid,))
+    except sqlite3.OperationalError as e:  # pragma: no cover - defensive
+        logger.warning("FTS delete failed: %s", e)
 
 
 def _row_to_msg(row: sqlite3.Row) -> Dict[str, Any]:
@@ -2177,16 +2506,17 @@ def _row_to_msg(row: sqlite3.Row) -> Dict[str, Any]:
 
 def db_create_conversation(provider: str, model_name: str, title: str = "",
                            folder: str = "", tags: Optional[List[str]] = None,
-                           persona_id: Optional[str] = None) -> Dict[str, Any]:
+                           persona_id: Optional[str] = None,
+                           origin: str = "chat") -> Dict[str, Any]:
     now = time.time()
     cid = f"conv_{uuid.uuid4().hex[:12]}"
     conn = _db()
     conn.execute(
         """INSERT INTO conversations
-              (id, title, provider, model, created_at, updated_at, folder, tags, persona_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+              (id, title, provider, model, created_at, updated_at, folder, tags, persona_id, origin)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (cid, title or "New conversation", provider, model_name, now, now,
-         folder or "", json.dumps(_coerce_tags(tags)), persona_id or None),
+         folder or "", json.dumps(_coerce_tags(tags)), persona_id or None, origin),
     )
     conn.commit()
     conn.close()
@@ -2200,6 +2530,7 @@ def db_create_conversation(provider: str, model_name: str, title: str = "",
         "pinned": False,
         "archived": False,
         "persona_id": persona_id,
+        "origin": origin,
     }
 
 
@@ -2208,7 +2539,8 @@ def db_list_conversations(include_archived: bool = False) -> List[Dict[str, Any]
     where = "" if include_archived else "WHERE c.archived = 0"
     rows = conn.execute(
         f"""SELECT c.id, c.title, c.provider, c.model, c.folder, c.tags,
-                  c.pinned, c.archived, c.persona_id, c.created_at, c.updated_at,
+                  c.pinned, c.archived, c.persona_id, c.parent_id, c.origin,
+                  c.created_at, c.updated_at,
                   (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS msg_count
            FROM conversations c {where}
            ORDER BY c.pinned DESC, c.updated_at DESC"""
@@ -2225,6 +2557,9 @@ def db_list_conversations(include_archived: bool = False) -> List[Dict[str, Any]
             "pinned": bool(r["pinned"]),
             "archived": bool(r["archived"]),
             "persona_id": r["persona_id"],
+            # F14/F19: lineage + provenance badges in the sidebar.
+            "parent_id": r["parent_id"],
+            "origin": r["origin"] or "chat",
             "created_at": r["created_at"],
             "updated_at": r["updated_at"],
             "msg_count": r["msg_count"],
@@ -2240,7 +2575,9 @@ def db_get_conversation(cid: str, last: Optional[int] = None) -> Optional[Dict[s
     persisted folder/tags/pinned/archived/persona (per-chat model override)."""
     conn = _db()
     conv = conn.execute(
-        "SELECT id, title, provider, model, folder, tags, pinned, archived, persona_id, created_at, updated_at FROM conversations WHERE id = ?",
+        "SELECT id, title, provider, model, folder, tags, pinned, archived, persona_id, "
+        "parent_id, forked_at_message_id, origin, created_at, updated_at "
+        "FROM conversations WHERE id = ?",
         (cid,),
     ).fetchone()
     if conv is None:
@@ -2271,6 +2608,11 @@ def db_get_conversation(cid: str, last: Optional[int] = None) -> Optional[Dict[s
         "pinned": bool(conv["pinned"]),
         "archived": bool(conv["archived"]),
         "persona_id": conv["persona_id"],
+        # F14/F19 lineage + provenance, so the UI can label forks and
+        # schedule-produced conversations.
+        "parent_id": conv["parent_id"],
+        "forked_at_message_id": conv["forked_at_message_id"],
+        "origin": conv["origin"] or "chat",
         "created_at": conv["created_at"],
         "updated_at": conv["updated_at"],
         "messages": [_row_to_msg(m) for m in rows],
@@ -2298,6 +2640,9 @@ def db_update_conversation_title(cid: str, title: str) -> bool:
 
 def db_delete_conversation(cid: str) -> bool:
     conn = _db()
+    # messages are removed by ON DELETE CASCADE, which does not fire our FTS
+    # cleanup — so drop the index rows explicitly before the parent goes away.
+    _fts_drop_conversation(conn, cid)
     cur = conn.execute("DELETE FROM conversations WHERE id = ?", (cid,))
     conn.commit()
     conn.close()
@@ -2390,12 +2735,16 @@ def db_save_message(
     first user message if the conversation still has its default title."""
     conn = _db()
     now = time.time()
-    conn.execute(
+    flat = _coerce_content(content)
+    cur = conn.execute(
         """INSERT INTO messages (conversation_id, role, content, model, provider, reasoning, usage_json, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (cid, role, _coerce_content(content), model, provider, reasoning,
+        (cid, role, flat, model, provider, reasoning,
          json.dumps(usage) if usage else None, now),
     )
+    # F13: keep the full-text index in step with the transcript. Indexed here in
+    # the same transaction so search can never lag a saved turn.
+    _fts_index_message(conn, cur.lastrowid, flat, cid, role)
     # Persistent token ledger: record usage for this turn even if the
     # conversation is later cleared/deleted. Only assistant messages (and any
     # message carrying provider usage) contribute; usage is reported per LLM
@@ -2439,7 +2788,173 @@ def db_drop_last_turn(cid: str) -> None:
     if row and row[0]:
         conn.execute("DELETE FROM messages WHERE conversation_id = ? AND id >= ?", (cid, row[0]))
         conn.commit()
+    if FTS_AVAILABLE:
+        # Regenerate replaces the tail; drop those rows from the index so stale
+        # text can't resurface in search.
+        conn.execute(
+            "DELETE FROM messages_fts WHERE conversation_id = ? AND rowid >= ?",
+            (cid, row[0]),
+        )
+        conn.commit()
     conn.close()
+
+
+def db_fork_conversation(cid: str, at_message_id: Optional[int] = None,
+                         title: str = "") -> Dict[str, Any]:
+    """F14: branch a conversation.
+
+    Copies every message up to and including `at_message_id` (or the whole
+    conversation when omitted) into a brand-new conversation that remembers its
+    parent and fork point, so the UI can offer "compare to parent" (F22).
+    Returns the new conversation, or raises ValueError if the source is unknown.
+    """
+    src = db_get_conversation(cid)
+    if src is None:
+        raise ValueError("Conversation not found.")
+    conn = _db()
+    now = time.time()
+    new_id = f"conv_{uuid.uuid4().hex[:12]}"
+    # Select the copied rows straight from the DB rather than reusing the parsed
+    # dicts: we need each message's rowid to resolve the fork point, and we want
+    # the stored content verbatim (already flattened by _coerce_content).
+    params: List[Any] = [cid]
+    cut_clause = ""
+    if at_message_id:
+        cut_clause = "AND id <= ?"
+        params.append(int(at_message_id))
+    rows = conn.execute(
+        "SELECT id, role, content, model, provider, reasoning, usage_json "
+        f"FROM messages WHERE conversation_id = ? {cut_clause} ORDER BY id ASC",
+        params,
+    ).fetchall()
+    if at_message_id and not any(r["id"] == int(at_message_id) for r in rows):
+        conn.close()
+        raise ValueError(f"Fork point {at_message_id} is not a message in this conversation.")
+    branch_title = (title or "").strip() or f"{src['title']} (fork)"
+    conn.execute(
+        """INSERT INTO conversations
+              (id, title, provider, model, created_at, updated_at, folder, tags,
+               persona_id, parent_id, forked_at_message_id, origin)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fork')""",
+        (new_id, branch_title, src["provider"], src["model"], now, now,
+         src["folder"], json.dumps(src["tags"]), src["persona_id"], cid,
+         at_message_id or None),
+    )
+    for m in rows:
+        content = m["content"] or ""
+        cur = conn.execute(
+            """INSERT INTO messages (conversation_id, role, content, model, provider,
+                                    reasoning, usage_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (new_id, m["role"], content, m["model"], m["provider"],
+             m["reasoning"], m["usage_json"], now),
+        )
+        _fts_index_message(conn, cur.lastrowid, content, new_id, m["role"])
+    conn.commit()
+    conn.close()
+    return db_get_conversation(new_id)
+
+
+def db_search_messages(query: str, limit: int = 40, include_archived: bool = True
+                       ) -> List[Dict[str, Any]]:
+    """F13: search every message body, newest match first.
+
+    Uses FTS5 when available (ranked, diacritic-insensitive, snippeted) and
+    falls back to a LIKE scan otherwise. Returns hits carrying enough context
+    for the sidebar to render "title › role › snippet" without a second query.
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    limit = max(1, min(int(limit or 40), 200))
+    conn = _db()
+    archived_filter = "" if include_archived else "AND c.archived = 0"
+    try:
+        if FTS_AVAILABLE:
+            # Quote each term so user punctuation can't be parsed as FTS syntax;
+            # the trailing "*" turns the last token into a prefix match.
+            terms = [t for t in re.split(r"\s+", q) if t]
+            match = " ".join(f'"{t}"*' for t in terms) if terms else '""'
+            # messages_fts holds no timestamp, so join back to messages by rowid
+            # to report when the hit happened and to read the stored content.
+            rows = conn.execute(
+                f"""SELECT f.conversation_id AS conversation_id,
+                           f.role AS role,
+                           m.created_at AS created_at,
+                           snippet(messages_fts, 0, '[', ']', '…', 12) AS snip,
+                           c.title AS conv_title
+                    FROM messages_fts f
+                    JOIN conversations c ON c.id = f.conversation_id
+                    LEFT JOIN messages m ON m.id = f.rowid
+                    WHERE messages_fts MATCH ? {archived_filter}
+                    ORDER BY rank
+                    LIMIT ?""",
+                (match, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"""SELECT m.conversation_id AS conversation_id, m.role AS role,
+                           m.created_at AS created_at,
+                           substr(m.content, 1, 160) AS snip,
+                           c.title AS conv_title
+                    FROM messages m
+                    JOIN conversations c ON c.id = m.conversation_id
+                    WHERE m.content LIKE ? {archived_filter}
+                    ORDER BY m.created_at DESC
+                    LIMIT ?""",
+                (f"%{q}%", limit),
+            ).fetchall()
+        conn.close()
+    except sqlite3.OperationalError:
+        # A malformed MATCH expression must never 500 the sidebar search: fall
+        # back to a LIKE scan, which is slower but always available.
+        logger.warning("FTS search failed for %r; falling back to LIKE", q, exc_info=True)
+        rows = conn.execute(
+            "SELECT conversation_id AS conversation_id, role AS role, "
+            "created_at AS created_at, substr(content, 1, 160) AS snip, "
+            "'' AS conv_title FROM messages "
+            "WHERE content LIKE ? ORDER BY created_at DESC LIMIT ?",
+            (f"%{q}%", limit),
+        ).fetchall()
+        conn.close()
+    return [
+        {"conversation_id": r["conversation_id"], "role": r["role"],
+         "created_at": r["created_at"], "snippet": (r["snip"] or "").strip(),
+         "conversation_title": r["conv_title"] or "(conversation)"}
+        for r in rows
+    ]
+
+
+def db_diff_conversations(cid: str, other: str) -> Dict[str, Any]:
+    """F22: compare two conversations.
+
+    Walks both transcripts and reports the shared prefix (identical role+content
+    pairs) and then the diverging tail of each side. Used to show what a fork
+    changed relative to its parent.
+    """
+    a = db_get_conversation(cid)
+    b = db_get_conversation(other)
+    if a is None or b is None:
+        raise ValueError("Conversation not found.")
+
+    def norm(m: Dict[str, Any]) -> str:
+        return f"{m['role']}\x00{(m.get('content') or '').strip()}"
+
+    am = [norm(m) for m in a["messages"]]
+    bm = [norm(m) for m in b["messages"]]
+    shared = 0
+    for x, y in zip(am, bm):
+        if x != y:
+            break
+        shared += 1
+    return {
+        "a": {"id": a["id"], "title": a["title"], "message_count": len(am)},
+        "b": {"id": b["id"], "title": b["title"], "message_count": len(bm)},
+        "shared_prefix": shared,
+        "identical": am == bm,
+        "a_only": a["messages"][shared:],
+        "b_only": b["messages"][shared:],
+    }
 
 
 def db_record_usage(provider: str, model: str, usage: Optional[Dict], actor: str = "") -> None:
@@ -2648,6 +3163,27 @@ async def new_conversation(req: Optional[Dict[str, Any]] = None):
     )
 
 
+@app.get("/api/conversations/search")
+async def search_conversations(request: Request, q: str = "", limit: int = 40):
+    """F13: full-text search across every message body on this device.
+
+    Owner-only, matching GET /api/conversations: search would otherwise let a
+    general token read every other user's history.
+
+    Declared BEFORE /api/conversations/{cid} on purpose — otherwise the path
+    parameter would swallow the literal "search" and return a 404.
+    """
+    if _auth_enabled() and getattr(request.state, "actor", "") != "owner":
+        raise HTTPException(403, "Search is owner/admin only.")
+    if not (q or "").strip():
+        return {"query": "", "results": [], "engine": "fts" if FTS_AVAILABLE else "like"}
+    return {
+        "query": q,
+        "results": db_search_messages(q, limit=limit),
+        "engine": "fts" if FTS_AVAILABLE else "like",
+    }
+
+
 @app.get("/api/conversations/{cid}")
 async def get_conversation(cid: str, last: Optional[int] = None):
     """Full conversation, or `?last=N` for the most recent N messages
@@ -2692,6 +3228,8 @@ async def clear_conversation_messages(cid: str):
         "DELETE FROM messages WHERE conversation_id = ? AND role IN ('user','assistant','tool')",
         (cid,),
     )
+    # F13: the removed turns must leave the search index too.
+    _fts_drop_conversation(conn, cid)
     conn.execute(
         "UPDATE conversations SET title = 'New conversation', updated_at = ? WHERE id = ?",
         (time.time(), cid),
@@ -2700,6 +3238,39 @@ async def clear_conversation_messages(cid: str):
     removed = cur.rowcount
     conn.close()
     return {"ok": True, "removed": removed}
+
+
+@app.post("/api/conversations/{cid}/fork")
+async def fork_conversation(cid: str, at_message_id: Optional[int] = None,
+                            title: Optional[str] = None,
+                            req: Optional[Dict[str, Any]] = None):
+    """F14: branch this conversation, optionally at a specific message.
+
+    Copies the transcript up to `at_message_id` into a new conversation that
+    records its parent, so the two can be compared later (F22). The original is
+    left completely untouched.
+    """
+    body = req or {}
+    # Only treat the positional as a fork point when it really names a row;
+    # otherwise a client that leaves it unset (None/0) still forks everything.
+    at = at_message_id if at_message_id else body.get("at_message_id")
+    try:
+        return db_fork_conversation(
+            cid,
+            at_message_id=int(at) if at not in (None, "") else None,
+            title=(title if title is not None else body.get("title", "")) or "",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/conversations/{cid}/diff/{other}")
+async def diff_conversations(cid: str, other: str):
+    """F22: show where two conversations diverge (typically a fork vs parent)."""
+    try:
+        return db_diff_conversations(cid, other)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/api/conversations/{cid}/export")
@@ -2896,6 +3467,12 @@ async def chat(request: Request, req: ChatRequest):
     trace: List[Dict[str, Any]] = []
     all_citations: List[Dict[str, Any]] = []
     eff = (req.reasoning_effort or "").strip().lower() or None
+    compaction: Optional[Dict[str, Any]] = None
+
+    # F18: shrink a runaway transcript before it is sent. Only the outbound copy
+    # is compacted — the stored conversation keeps every message.
+    if req.compact:
+        messages, compaction = await _compact_messages(messages, provider, model, api_key, eff)
 
     # If saving to history, capture the last user message that triggered this turn.
     save_history = bool(req.conversation_id)
@@ -2920,7 +3497,12 @@ async def chat(request: Request, req: ChatRequest):
         finished = False
         data = None
         for _ in range(req.max_tool_rounds):
-            data = await call_llm(messages, model, api_key, provider, tools, eff)
+            raw, served_by = await call_llm_failover(messages, model, api_key, provider, tools, eff)
+            # F15: if a fallback provider served the turn, keep the reported
+            # provider honest so the UI/ledger attribute usage correctly.
+            if served_by != provider:
+                provider, model = served_by, _resolve_model(served_by, "")
+            data = raw
             choice = data["choices"][0]
             msg = choice["message"]
 
@@ -2937,6 +3519,24 @@ async def chat(request: Request, req: ChatRequest):
                 messages.append(msg)
                 finished = True
                 break
+
+            # F20: halt before running anything that mutates state or reaches
+            # out, unless the client already approved this exact call. The
+            # assistant turn is kept so the client can re-post and resume.
+            if req.require_approval:
+                pending = _pending_approvals(tool_calls, req.approved_tools or [])
+                if pending:
+                    messages.append(msg)
+                    return JSONResponse({
+                        "status": "awaiting_approval",
+                        "provider": provider,
+                        "model": model,
+                        "pending_tools": pending,
+                        "approved_tools": req.approved_tools or [],
+                        "conversation_id": req.conversation_id,
+                        "trace": trace,
+                        "agent": True,
+                    })
 
             # Record the assistant turn (must include tool_calls for the API).
             used_tools = True
@@ -2978,7 +3578,7 @@ async def chat(request: Request, req: ChatRequest):
         if not finished:
             # Cap reached: last message is a tool result — one final no-tools
             # pass so the model produces a user-facing answer.
-            data = await call_llm(messages, model, api_key, provider, None, eff)
+            data, _served = await call_llm_failover(messages, model, api_key, provider, None, eff)
             final_msg = data["choices"][0]["message"]
             messages.append(final_msg)
             if "usage" in data:
@@ -2991,7 +3591,7 @@ async def chat(request: Request, req: ChatRequest):
         if used_tools and not (final_msg.get("content") or "").strip():
             messages.append({"role": "user", "content":
                              "Answer now using the tool results above. Do not call more tools."})
-            data = await call_llm(messages, model, api_key, provider, None, eff)
+            data, _served = await call_llm_failover(messages, model, api_key, provider, None, eff)
             final_msg = data["choices"][0]["message"]
             messages.append(final_msg)
             if "usage" in data:
@@ -3021,10 +3621,13 @@ async def chat(request: Request, req: ChatRequest):
             "trace": trace,
             "citations": all_citations,
             "agent": True,
+            "compaction": compaction,
             "title": db_get_conversation_title(req.conversation_id) if req.conversation_id else None,
         })
     else:
-        data = await call_llm(messages, model, api_key, provider, None, eff)
+        data, served_by = await call_llm_failover(messages, model, api_key, provider, None, eff)
+        if served_by != provider:
+            provider, model = served_by, _resolve_model(served_by, "")
         msg = data["choices"][0]["message"]
         # Persist to chat history if a conversation id was supplied.
         if save_history and last_user_msg:
@@ -3051,6 +3654,7 @@ async def chat(request: Request, req: ChatRequest):
             "trace": [],
             "citations": [],
             "agent": False,
+            "compaction": compaction,
             "title": db_get_conversation_title(req.conversation_id) if req.conversation_id else None,
         })
 
@@ -3059,6 +3663,113 @@ async def chat(request: Request, req: ChatRequest):
 # Streaming chat (SSE) — token-by-token relay of the provider's own stream.
 # Agent mode stays on the non-streaming endpoint (multi-round tool loop).
 # ----------------------------------------------------------------------------
+def _estimate_chars(messages: List[Dict[str, Any]]) -> int:
+    """Rough outbound payload size. ~4 chars/token is close enough for a
+    compaction trigger and avoids a tokenizer dependency."""
+    total = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            total += len(c)
+        elif isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict):
+                    total += len(str(b.get("text") or b.get("url") or ""))
+        total += 8  # role/formatting overhead
+    return total
+
+
+async def _compact_messages(
+    messages: List[Dict[str, Any]], provider: str, model: str, api_key: str,
+    reasoning_effort: Optional[str] = None,
+) -> tuple:
+    """F18: summarize the oldest half of a long transcript.
+
+    Returns (messages, info). The stored transcript is never touched — only the
+    copy sent to the provider is compacted, so the UI still shows the full
+    conversation and nothing is lost on reload. The trailing turns are always
+    kept verbatim so the model retains recent detail and the user's actual
+    question.
+    """
+    threshold = NOVA_COMPACT_CHARS
+    if threshold <= 0 or _estimate_chars(messages) <= threshold:
+        return messages, None
+    # Keep the last 6 messages intact; summarize everything before them.
+    keep = 6
+    if len(messages) <= keep + 2:
+        return messages, None
+    head, tail = messages[:-keep], messages[-keep:]
+    transcript = "\n\n".join(
+        f"{m.get('role', '?')}: {_coerce_content(m.get('content'))[:2000]}"
+        for m in head
+    )
+    if len(transcript) < 500:
+        return messages, None  # too small to be worth a summarizer call
+    try:
+        data = await call_llm_failover(
+            [
+                {"role": "system",
+                 "content": "Summarize the conversation so far. Preserve decisions, "
+                            "findings, names, credentials locations and open questions. "
+                            "Be terse; this replaces the earlier turns."},
+                {"role": "user", "content": transcript[:24000]},
+            ],
+            model, api_key, provider, None, reasoning_effort,
+        )
+        summary = (data[0]["choices"][0]["message"].get("content") or "").strip()
+        served_by = data[1]
+    except HTTPException as e:
+        # Compaction is an optimization; if it fails, send the full transcript.
+        logger.warning("F18 compaction skipped: %s", e.detail)
+        return messages, None
+    if not summary:
+        return messages, None
+    compacted = (
+        [{"role": "system",
+          "content": f"[Summary of {len(head)} earlier messages, auto-compacted to save context]:\n{summary}"}]
+        + tail
+    )
+    return compacted, {
+        "compacted": True,
+        "summarized_messages": len(head),
+        "kept_messages": len(tail),
+        "chars_before": _estimate_chars(messages),
+        "chars_after": _estimate_chars(compacted),
+        "summary_provider": served_by,
+    }
+
+
+def _pending_approvals(
+    tool_calls: List[Dict[str, Any]], approved: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """F20: which of these tool calls still need a human yes?
+
+    A call is approved when the client echoed back a matching name+arguments
+    pair. Comparison is on the argument JSON so re-ordering/adding fields can't
+    smuggle a different call past the check.
+    """
+    granted = set()
+    for a in approved or []:
+        try:
+            granted.add((a.get("name", ""), json.dumps(a.get("arguments") or {}, sort_keys=True)))
+        except TypeError:
+            continue
+    pending: List[Dict[str, Any]] = []
+    for tc in tool_calls or []:
+        fn = tc.get("function", {}) or {}
+        name = fn.get("name", "")
+        if name not in NOVA_APPROVAL_TOOLS:
+            continue
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        if (name, json.dumps(args, sort_keys=True)) in granted:
+            continue
+        pending.append({"id": tc.get("id"), "name": name, "arguments": args})
+    return pending
+
+
 def _sse(obj: Dict[str, Any]) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
@@ -3477,7 +4188,7 @@ async def analyze(
         "structure the report as requested."
     )
     try:
-        data_ = await call_llm(
+        data_, served_provider = await call_llm_failover(
             [
                 {"role": "system", "content": system_role},
                 {"role": "user", "content": prompt},
@@ -3504,7 +4215,8 @@ async def analyze(
         "stats": stats,
         "mode": mode,
         "model": data_.get("model", use_model),
-        "provider": provider,
+        # F15: report who actually answered if a fallback provider stepped in.
+        "provider": served_provider,
         "usage": data_.get("usage"),
         "filename": file.filename,
     })
@@ -3553,6 +4265,504 @@ async def attach(file: UploadFile = File(...), max_chars: int = Form(8000)):
 
 
 # Serve the static frontend; mount at the end so /api/* isn't shadowed.
+# ----------------------------------------------------------------------------
+# F16 — Provider benchmark harness
+#
+# The lab's real question is "which of these 17 providers is actually good
+# enough, and what does it cost?". This fires a fixed prompt suite at every
+# configured provider and records latency / tokens / cost per cell so the
+# answer is measured instead of guessed. Runs are bounded by a semaphore
+# because the target is a phone: parallelism is capped by NOVA_BENCH_CONCURRENCY.
+# ----------------------------------------------------------------------------
+BENCH_DEFAULT_SUITE: List[str] = [
+    "Reply with exactly: OK",
+    "In one sentence, what is a SQL injection?",
+    "Write a Python function that reverses a string. Code only.",
+]
+
+
+class BenchRun(BaseModel):
+    label: str = ""
+    suite: Optional[List[str]] = None
+    providers: Optional[List[str]] = None
+    models: Optional[Dict[str, str]] = None
+
+
+def _bench_record(label: str, prompt: str, provider: str, model: str, status: str,
+                  latency_ms: Optional[int], usage: Optional[Dict[str, Any]],
+                  cost: Optional[float], error: Optional[str], excerpt: str,
+                  actor: str) -> None:
+    conn = _db()
+    conn.execute(
+        """INSERT INTO bench_runs
+             (label, suite, provider, model, status, latency_ms, prompt_tokens,
+              completion_tokens, total_tokens, cost_usd, error, output_excerpt,
+              actor, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (label, prompt[:500], provider, model, status, latency_ms,
+         (usage or {}).get("prompt_tokens"), (usage or {}).get("completion_tokens"),
+         (usage or {}).get("total_tokens"), cost, error, excerpt[:800], actor, time.time()),
+    )
+    conn.commit()
+    conn.close()
+
+
+@app.post("/api/bench/run")
+async def bench_run(request: Request, body: BenchRun):
+    """Run a prompt suite across providers, concurrently but bounded."""
+    _check_actor_limits(request)
+    actor = getattr(request.state, "actor", "") or ""
+    # An omitted suite means "use the default"; an explicitly empty one is a
+    # client mistake, so it must 400 rather than silently run the default.
+    requested_suite = BENCH_DEFAULT_SUITE if body.suite is None else body.suite
+    suite = [p for p in requested_suite if p.strip()]
+    if not suite:
+        raise HTTPException(400, "Prompt suite is empty.")
+    # An explicitly empty `providers` list is a client error; only `None` (key
+    # omitted) means "every configured provider".
+    if body.providers is not None:
+        targets = [pid for pid in body.providers if pid in PROVIDERS and _provider_key(pid)]
+        if not targets:
+            raise HTTPException(400, "No known provider with a configured API key.")
+    else:
+        targets = [pid for pid in PROVIDERS if _provider_key(pid)]
+        if not targets:
+            raise HTTPException(400, "No providers with a configured API key.")
+    if len(targets) * len(suite) > 60:
+        raise HTTPException(400, "That is too many provider/prompt combinations (max 60).")
+    models = body.models or {}
+
+    sem = asyncio.Semaphore(NOVA_BENCH_CONCURRENCY)
+    results: List[Dict[str, Any]] = []
+
+    async def one(prompt: str, pid: str) -> Dict[str, Any]:
+        model = _resolve_model(pid, models.get(pid, ""))
+        started = time.time()
+        async with sem:
+            try:
+                # call_llm directly: a benchmark must measure the provider asked
+                # for, so silently failing over would corrupt the comparison.
+                data = await call_llm(
+                    [{"role": "user", "content": prompt}], model, _provider_key(pid), pid,
+                )
+            except HTTPException as e:
+                elapsed = int((time.time() - started) * 1000)
+                _bench_record(body.label, prompt, pid, model, "error", elapsed, None, None,
+                              str(e.detail), "", actor)
+                return {"provider": pid, "model": model, "status": "error",
+                        "error": e.detail, "latency_ms": elapsed}
+            except Exception as e:  # noqa: BLE001 — a bench cell must never 500 the run
+                elapsed = int((time.time() - started) * 1000)
+                _bench_record(body.label, prompt, pid, model, "error", elapsed, None, None,
+                              repr(e), "", actor)
+                return {"provider": pid, "model": model, "status": "error",
+                        "error": repr(e), "latency_ms": elapsed}
+        elapsed = int((time.time() - started) * 1000)
+        usage = data.get("usage") or {}
+        text = (data["choices"][0]["message"].get("content") or "")
+        cost = _cost_usd(pid, model, usage)
+        # Record against the ledger too, so benchmarks show up in the Usage tab
+        # rather than being invisible spend.
+        db_record_usage(pid, model, usage or None, actor or "bench")
+        _bench_record(body.label, prompt, pid, model, "ok", elapsed, usage, cost, None, text, actor)
+        return {"provider": pid, "model": model, "status": "ok", "latency_ms": elapsed,
+                "usage": usage, "cost_usd": cost, "excerpt": text[:200]}
+
+    for prompt in suite:
+        results.extend(await asyncio.gather(*(one(prompt, pid) for pid in targets)))
+
+    ok = [r for r in results if r["status"] == "ok"]
+    return {
+        "label": body.label,
+        "results": results,
+        "summary": {
+            "cells": len(results),
+            "ok": len(ok),
+            "failed": len(results) - len(ok),
+            "median_latency_ms": (sorted(r["latency_ms"] for r in ok)[len(ok) // 2] if ok else None),
+            "total_cost_usd": round(sum(r.get("cost_usd") or 0.0 for r in ok), 6),
+        },
+    }
+
+
+@app.get("/api/bench/runs")
+async def bench_history(request: Request, limit: int = 100):
+    """Recent benchmark cells, newest first."""
+    _check_actor_limits(request)
+    conn = _db()
+    rows = conn.execute(
+        "SELECT * FROM bench_runs ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),)
+    ).fetchall()
+    conn.close()
+    return {
+        "runs": [
+            {
+                "id": r["id"], "label": r["label"], "prompt": r["suite"],
+                "provider": r["provider"], "model": r["model"], "status": r["status"],
+                "latency_ms": r["latency_ms"], "total_tokens": r["total_tokens"],
+                "cost_usd": r["cost_usd"], "error": r["error"],
+                "output_excerpt": r["output_excerpt"], "actor": r["actor"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+    }
+
+
+# ----------------------------------------------------------------------------
+# F19 — Scheduled prompts
+#
+# Interval-driven, deliberately not cron: a phone that sleeps, reboots and loses
+# signal cannot honour cron, and the watchdog restarts uvicorn anyway. "Every N
+# minutes" degrades gracefully. Each run writes into its own conversation so
+# results are browsable like any other chat.
+# ----------------------------------------------------------------------------
+_sched_task: Optional[asyncio.Task] = None
+
+
+def _sched_due(row: sqlite3.Row, now: float) -> bool:
+    if not row["enabled"]:
+        return False
+    if not row["last_run_at"]:
+        return True
+    return (now - row["last_run_at"]) >= (row["every_min"] * 60)
+
+
+async def run_schedule_now(row: sqlite3.Row, actor: str = "scheduler") -> Dict[str, Any]:
+    """Execute one schedule: create its conversation, run the prompt, record the
+    outcome. Never raises — a failing schedule must not kill the ticker."""
+    pid = row["provider"] if row["provider"] in PROVIDERS else DEFAULT_PROVIDER
+    label = f"[schedule] {row['name']}"
+    try:
+        conv = db_create_conversation(
+            pid, _resolve_model(pid, row["model"] or ""), title=label,
+            tags=["schedule"], origin="schedule",
+        )
+        cid = conv["id"]
+        req = ChatRequest(
+            messages=[{"role": "user", "content": row["prompt"]}],
+            provider=pid, model=row["model"] or "", conversation_id=cid,
+        )
+        provider, api_key, messages, model = _prepare_chat(req)
+        data, served = await call_llm_failover(messages, model, api_key, provider)
+        msg = data["choices"][0]["message"]
+        db_save_message(cid, "user", row["prompt"], None, provider, actor=actor)
+        # usage= must be a keyword: the 6th positional is `reasoning`, and
+        # passing a dict there is what broke the first run of this function.
+        db_save_message(cid, "assistant", msg.get("content", ""), model, served,
+                        usage=data.get("usage"), actor=actor)
+        _sched_update(row["id"], "ok", None, cid)
+        return {"ok": True, "conversation_id": cid, "provider": served}
+    except HTTPException as e:
+        _sched_update(row["id"], "error", str(e.detail), None)
+        return {"ok": False, "error": e.detail}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("schedule %s failed: %r", row["id"], e)
+        _sched_update(row["id"], "error", repr(e), None)
+        return {"ok": False, "error": repr(e)}
+
+
+def _sched_update(sid: str, status: str, error: Optional[str], cid: Optional[str]) -> None:
+    conn = _db()
+    conn.execute(
+        "UPDATE schedules SET last_run_at = ?, last_status = ?, last_error = ?, "
+        "last_conv_id = ? WHERE id = ?",
+        (time.time(), status, error, cid, sid),
+    )
+    conn.commit()
+    conn.close()
+
+
+async def _scheduler_loop() -> None:
+    while True:
+        try:
+            await asyncio.sleep(NOVA_SCHED_TICK_S)
+            conn = _db()
+            rows = conn.execute("SELECT * FROM schedules WHERE enabled = 1").fetchall()
+            conn.close()
+            now = time.time()
+            due = [r for r in rows if _sched_due(r, now)]
+            if due:
+                logger.info("scheduler: running %d due schedule(s)", len(due))
+                # One at a time: a phone should not fan out on a timer.
+                for row in due:
+                    await run_schedule_now(row)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — the ticker must survive anything
+            logger.warning("scheduler tick failed: %r", e)
+
+
+
+
+
+class ScheduleIn(BaseModel):
+    name: str = ""
+    prompt: str = ""
+    provider: str = ""
+    model: str = ""
+    every_min: int = Field(default=60, ge=1, le=10080)
+    enabled: bool = True
+
+
+def _require_sched_auth() -> None:
+    """A schedule spends tokens on a timer with nobody watching. Refuse to arm
+    one unless the deployment is actually authenticated, so an open instance
+    can't be turned into a free inference meter by a passer-by."""
+    if not _auth_enabled():
+        raise HTTPException(
+            403, "Schedules require NOVA_AUTH_PASSPHRASE to be set (they spend tokens unattended)."
+        )
+
+
+def _sched_row_to_dict(r: sqlite3.Row) -> Dict[str, Any]:
+    return {
+        "id": r["id"], "name": r["name"], "prompt": r["prompt"],
+        "provider": r["provider"], "model": r["model"], "every_min": r["every_min"],
+        "enabled": bool(r["enabled"]), "last_run_at": r["last_run_at"],
+        "last_status": r["last_status"], "last_error": r["last_error"],
+        "last_conversation_id": r["last_conv_id"], "created_at": r["created_at"],
+    }
+
+
+@app.get("/api/schedules")
+async def list_schedules():
+    """List scheduled prompts."""
+    conn = _db()
+    rows = conn.execute("SELECT * FROM schedules ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return {"schedules": [_sched_row_to_dict(r) for r in rows]}
+
+
+@app.post("/api/schedules")
+async def create_schedule(body: ScheduleIn):
+    """Create a scheduled prompt.
+
+    Requires auth to be enabled: an unauthenticated deployment would otherwise
+    let anyone queue recurring work that spends the operator's tokens.
+    """
+    if not (body.name or "").strip() or not (body.prompt or "").strip():
+        raise HTTPException(400, "A schedule needs both a name and a prompt.")
+    _require_sched_auth()
+    sid = f"sched_{uuid.uuid4().hex[:10]}"
+    conn = _db()
+    conn.execute(
+        "INSERT INTO schedules (id, name, prompt, provider, model, every_min, enabled, "
+        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (sid, body.name.strip(), body.prompt.strip(), body.provider or "",
+         body.model or "", body.every_min, 1 if body.enabled else 0, time.time()),
+    )
+    conn.commit()
+    conn.close()
+    return _sched_row_to_dict(_db().execute("SELECT * FROM schedules WHERE id = ?", (sid,)).fetchone())
+
+
+@app.patch("/api/schedules/{sid}")
+async def update_schedule(sid: str, body: Dict[str, Any]):
+    """Update a schedule. Unknown keys are ignored; `enabled` toggles it."""
+    allowed = {"name", "prompt", "provider", "model", "every_min", "enabled"}
+    sets, params = [], []
+    for k, v in (body or {}).items():
+        if k not in allowed:
+            continue
+        if k == "enabled":
+            v = 1 if v else 0
+        if k == "every_min":
+            v = max(1, min(int(v), 10080))
+        sets.append(f"{k} = ?")
+        params.append(v)
+    if not sets:
+        raise HTTPException(400, "Nothing to update.")
+    conn = _db()
+    cur = conn.execute(f"UPDATE schedules SET {', '.join(sets)} WHERE id = ?", (*params, sid))
+    conn.commit()
+    conn.close()
+    if not cur.rowcount:
+        raise HTTPException(404, "Schedule not found.")
+    return _sched_row_to_dict(_db().execute("SELECT * FROM schedules WHERE id = ?", (sid,)).fetchone())
+
+
+@app.delete("/api/schedules/{sid}")
+async def delete_schedule(sid: str):
+    conn = _db()
+    cur = conn.execute("DELETE FROM schedules WHERE id = ?", (sid,))
+    conn.commit()
+    conn.close()
+    if not cur.rowcount:
+        raise HTTPException(404, "Schedule not found.")
+    return {"ok": True}
+
+
+@app.post("/api/schedules/{sid}/run")
+async def trigger_schedule(sid: str):
+    """Run a schedule immediately, regardless of its interval."""
+    conn = _db()
+    row = conn.execute("SELECT * FROM schedules WHERE id = ?", (sid,)).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(404, "Schedule not found.")
+    return await run_schedule_now(row, actor="manual")
+
+
+# ----------------------------------------------------------------------------
+# F21 — Whole-archive backup / restore
+#
+# Per-conversation export (F6) is for sharing one chat. This is the disaster
+# recovery path: everything, in one JSON document, restorable onto a fresh phone.
+# Owner-only — the archive contains every conversation on the device.
+# ----------------------------------------------------------------------------
+def _require_owner_for_backup(request: Request) -> None:
+    if _auth_enabled() and getattr(request.state, "actor", "") != "owner":
+        raise HTTPException(403, "Backup/restore is owner/admin only.")
+
+
+@app.get("/api/backup/export")
+async def backup_export(request: Request, include_usage: bool = False):
+    """Dump conversations, messages, personas and schedules as one JSON document.
+    Set include_usage=1 to also carry the usage ledger (it can be large)."""
+    _require_owner_for_backup(request)
+    conn = _db()
+    convs = conn.execute(
+        "SELECT id, title, provider, model, folder, tags, pinned, archived, "
+        "persona_id, parent_id, forked_at_message_id, origin, created_at, updated_at "
+        "FROM conversations"
+    ).fetchall()
+    msgs = conn.execute(
+        "SELECT conversation_id, role, content, model, provider, reasoning, "
+        "usage_json, created_at FROM messages ORDER BY id ASC"
+    ).fetchall()
+    personas = conn.execute("SELECT * FROM personas").fetchall()
+    scheds = conn.execute("SELECT * FROM schedules").fetchall()
+    usage = []
+    if include_usage:
+        usage = [
+            dict(r) for r in conn.execute("SELECT * FROM usage_ledger ORDER BY id ASC").fetchall()
+        ]
+    conn.close()
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    payload = {
+        "format": "nova-archive",
+        "version": 1,
+        "created_at": time.time(),
+        "conversations": [dict(r) for r in convs],
+        "messages": [dict(r) for r in msgs],
+        "personas": [dict(r) for r in personas],
+        "schedules": [dict(r) for r in scheds],
+        "usage_ledger": usage,
+    }
+    return JSONResponse(
+        payload,
+        headers={"Content-Disposition": f'attachment; filename="nova-archive-{stamp}.json"'},
+    )
+
+
+@app.post("/api/backup/import")
+async def backup_import(request: Request, req: Dict[str, Any]):
+    """Restore an archive produced by /api/backup/export.
+
+    mode="merge" (default) keeps existing rows and only inserts ones whose id is
+    absent, so importing an older backup can never destroy newer work.
+    mode="replace" clears conversations/messages first — use with care.
+    """
+    _require_owner_for_backup(request)
+    body = req or {}
+    archive = body.get("archive") or body
+    if not isinstance(archive, dict) or archive.get("format") != "nova-archive":
+        raise HTTPException(400, "Not a NOVA archive (missing format='nova-archive').")
+    mode = (body.get("mode") or "merge").lower()
+    if mode not in ("merge", "replace"):
+        raise HTTPException(400, "mode must be 'merge' or 'replace'.")
+    convs = archive.get("conversations") or []
+    msgs = archive.get("messages") or []
+    personas = archive.get("personas") or []
+    scheds = archive.get("schedules") or []
+
+    conn = _db()
+    imported = {"conversations": 0, "messages": 0, "personas": 0, "schedules": 0}
+    try:
+        if mode == "replace":
+            conn.execute("DELETE FROM messages")
+            conn.execute("DELETE FROM conversations")
+            conn.execute("DELETE FROM personas")
+            conn.execute("DELETE FROM schedules")
+        have_convs = {r[0] for r in conn.execute("SELECT id FROM conversations").fetchall()}
+        # Track which conversations this restore actually creates. In merge mode
+        # messages belonging to a pre-existing conversation must be skipped too,
+        # or re-importing an older archive duplicates the whole transcript.
+        added_convs: set = set()
+        for c in convs:
+            cid = c.get("id")
+            if not cid or cid in have_convs:
+                continue
+            conn.execute(
+                """INSERT INTO conversations
+                     (id, title, provider, model, folder, tags, pinned, archived,
+                      persona_id, parent_id, forked_at_message_id, origin, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (cid, c.get("title") or "New conversation", c.get("provider") or DEFAULT_PROVIDER,
+                 c.get("model") or "", c.get("folder") or "", c.get("tags") or "[]",
+                 int(bool(c.get("pinned"))), int(bool(c.get("archived"))), c.get("persona_id"),
+                 c.get("parent_id"), c.get("forked_at_message_id"), c.get("origin") or "chat",
+                 c.get("created_at") or time.time(), c.get("updated_at") or time.time()),
+            )
+            have_convs.add(cid)
+            added_convs.add(cid)
+            imported["conversations"] += 1
+        for m in msgs:
+            target = m.get("conversation_id")
+            if target not in added_convs:
+                continue  # existing conversation in merge mode: leave it alone
+            cur = conn.execute(
+                "INSERT INTO messages (conversation_id, role, content, model, provider, "
+                "reasoning, usage_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (target, m.get("role") or "user", m.get("content") or "",
+                 m.get("model"), m.get("provider"), m.get("reasoning"),
+                 m.get("usage_json"), m.get("created_at") or time.time()),
+            )
+            _fts_index_message(conn, cur.lastrowid, m.get("content") or "",
+                               target or "", m.get("role") or "user")
+            imported["messages"] += 1
+        for p in personas:
+            if conn.execute("SELECT 1 FROM personas WHERE id = ?", (p.get("id"),)).fetchone():
+                continue
+            conn.execute(
+                "INSERT INTO personas (id, name, system_prompt, provider, model, "
+                "tools_preset, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (p.get("id"), p.get("name") or "", p.get("system_prompt") or "",
+                 p.get("provider"), p.get("model"), p.get("tools_preset"),
+                 p.get("created_at") or time.time()),
+            )
+            imported["personas"] += 1
+        for s in scheds:
+            # Restored disabled: a restore shouldn't silently start spending tokens.
+            conn.execute(
+                "INSERT INTO schedules (id, name, prompt, provider, model, every_min, "
+                "enabled, last_run_at, last_status, last_error, last_conv_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
+                (s.get("id"), s.get("name") or "", s.get("prompt") or "", s.get("provider") or "",
+                 s.get("model") or "", int(s.get("every_min") or 60), s.get("last_run_at"),
+                 s.get("last_status"), s.get("last_error"), s.get("last_conv_id"),
+                 s.get("created_at") or time.time()),
+            )
+            imported["schedules"] += 1
+        # Restored messages arrive out of band, so rebuild the search index once
+        # at the end rather than trusting the archive's shape.
+        if FTS_AVAILABLE:
+            _fts_rebuild(conn)
+        conn.commit()
+    except sqlite3.Error as e:
+        conn.rollback()
+        conn.close()
+        raise HTTPException(500, f"Restore failed and was rolled back: {e}")
+    conn.close()
+    return {"ok": True, "mode": mode, "imported": imported}
+
+
+# Bind the scheduler lifespan now that both the handler and the loop exist.
+# (Kept at the bottom of the file so `lifespan` can reference _scheduler_loop.)
+app.router.lifespan_context = lifespan
+
+
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")

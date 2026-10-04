@@ -175,6 +175,21 @@ export const api = {
   updatePersona: (id, body) => jpatch(`/api/personas/${id}`, body),
   deletePersona: (id) => jdel(`/api/personas/${id}`),
 
+  // F13 — full-text search across message bodies (server-side; title/preview
+  // filtering in the sidebar can't see the inside of a conversation).
+  search: (q, limit = 40) => jget(`/api/conversations/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+
+  // F14 — branch a conversation, optionally at a specific message id.
+  forkConversation: (cid, { atMessageId = null, title = '' } = {}) => {
+    const q = new URLSearchParams()
+    if (atMessageId) q.set('at_message_id', String(atMessageId))
+    const suffix = q.toString() ? `?${q}` : ''
+    return jpost(`/api/conversations/${cid}/fork${suffix}`, { title })
+  },
+
+  // F22 — compare two conversations (typically a fork against its parent).
+  diffConversations: (a, b) => jget(`/api/conversations/${a}/diff/${b}`),
+
   // attach a document as conversation context (F10)
   attach: async (file, maxChars = 8000) => {
     const fd = new FormData()
@@ -184,6 +199,23 @@ export const api = {
     if (!r.ok) throw await toError(r, `attach -> ${r.status}`)
     return r.json()
   },
+
+  // F16 — provider benchmark: fire a prompt suite at N providers and collect
+  // latency / tokens / cost per cell.
+  benchRun: (body = {}) => jpost('/api/bench/run', body),
+  benchHistory: (limit = 100) => jget(`/api/bench/runs?limit=${limit}`),
+
+  // F19 — scheduled prompts (interval-driven; results land in a conversation).
+  schedules: () => jget('/api/schedules'),
+  createSchedule: (body) => jpost('/api/schedules', body),
+  updateSchedule: (id, patch) => jpatch(`/api/schedules/${id}`, patch),
+  deleteSchedule: (id) => jdel(`/api/schedules/${id}`),
+  runSchedule: (id) => jpost(`/api/schedules/${id}/run`, {}),
+
+  // F21 — whole-archive backup / restore. Export returns parsed JSON; the caller
+  // turns it into a download. Import merges by default (never destroys).
+  backupExport: (includeUsage = false) => jget(`/api/backup/export?include_usage=${includeUsage ? 1 : 0}`),
+  backupImport: (archive, mode = 'merge') => jpost('/api/backup/import', { archive, mode }),
 
   // multipart analyze
   analyze: async (file, { mode, model, provider, reasoning_effort, api_key }) => {

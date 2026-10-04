@@ -39,6 +39,8 @@ export default function SettingsModal({
   setProvider, setModel, setAgent, setReasoning,
   agent, reasoningEffort,
   toolsPreset = 'research', setToolsPreset,
+  requireApproval = false, setRequireApproval,
+  compactLongContext = false, setCompactLongContext,
   ollama, ollamaBusy, ollamaLoad, ollamaUnload,
   health,
   malayalamMode = false,
@@ -196,6 +198,7 @@ export default function SettingsModal({
                 >
                   <option value="core">Core — time, calculate, read_file</option>
                   <option value="research">Research — core + web search & fetch</option>
+                  <option value="recall">Recall — research + search your own chat history</option>
                   <option value="security">Recon — research + HTTP header probe</option>
                 </select>
                 <p className="text-[11px] text-muted/60 mt-1">
@@ -204,6 +207,41 @@ export default function SettingsModal({
                     : 'NovaSec automatically switches agent mode to the Recon set.'}
                 </p>
               </div>
+            </div>
+
+            {/* F20 + F18: agent safety / context toggles */}
+            <div className="space-y-2">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!requireApproval}
+                  onChange={(e) => setRequireApproval?.(e.target.checked)}
+                  className="mt-0.5 accent-[var(--accent2)]"
+                />
+                <span className="min-w-0">
+                  <span className="block text-[13px] text-text">Ask before risky tools</span>
+                  <span className="block text-[11px] text-muted/60">
+                    Pause the agent before it writes files or fetches a URL, and show you the
+                    exact call. Adds one round trip per risky tool.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!compactLongContext}
+                  onChange={(e) => setCompactLongContext?.(e.target.checked)}
+                  className="mt-0.5 accent-[var(--accent2)]"
+                />
+                <span className="min-w-0">
+                  <span className="block text-[13px] text-text">Compact long conversations</span>
+                  <span className="block text-[11px] text-muted/60">
+                    Once a thread gets long, summarize the oldest turns instead of resending them.
+                    Saves tokens; the full transcript is still kept. Needs
+                    {' '}<code className="text-[10px]">NOVA_COMPACT_CHARS</code> server-side.
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
 
