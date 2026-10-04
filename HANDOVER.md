@@ -293,7 +293,7 @@ YOU_API_KEY=…                    # web search (else DuckDuckGo)
 - **Owner can:** everything (history list, mint/revoke keys, restart, ollama control if wired).
 - **Frontend gating:** `App.jsx` reads `is_admin` from `/api/health`; `GatewayTab` hides mint/revoke/keys for non-admins; `Sidebar` shows "History is admin-only" on 403; `api.js` distinguishes 403/401 via `err.status`.
 
-Token transport: `Authorization: Bearer <tok>` header, `X-Nova-Token` header, or the 30-day cookie from `/api/auth/login`. Browsers hit the lock screen once → 30-day cookie; `x-nova-token` is the scriptable path. Rotate `NOVA_AUTH_PASSPHRASE` to revoke all devices.
+Token transport: `X-Nova-Token` header or the 30-day cookie (from `/api/auth/login`) for `/api/*` actors. **`Authorization: Bearer <sk-nova-*>` is used only for the `/v1/*` inference gateway** (minted keys), not for `/api/*` (the pentester confirmed Bearer on `/api/*` still 401s — it's `X-Nova-Token`/cookie there). Browsers hit the lock screen once → 30-day HttpOnly cookie; `X-Nova-Token` is the scriptable path. Rotate `NOVA_AUTH_PASSPHRASE` to revoke all devices (cookie + key cache).
 
 ---
 
@@ -336,7 +336,7 @@ cd ~/NOVA_Project/frontend && npx vite build   # -> ../static  (no server restar
 
 ## 13. Operations / smoke checks
 
-- **Tests (offline, no network):** `cd /home/dev/PROJECT/NOVA_Project && python3 -m pytest tests/ -q` → **51 passed** (44 backend + 7 ssrf). Providers are faked in `conftest.py`.
+- **Tests (offline, no network):** `cd /home/dev/PROJECT/NOVA_Project && python3 -m pytest tests/ -q` → **118 passed** (53 test functions, parametrized; 46 backend + 7 ssrf). Providers are faked in `conftest.py`.
 - **Lint/import sanity:** `python3 -c "import backend"` must succeed (no `AttributeError: … has no attribute '_is_admin'` etc.) before restarting.
 - **Live health (public, no token):** `curl -s https://nova.terminalflaw.xyz/api/health` → 200, `providers.<p>.configured`.
 - **Admin path:** with `X-Nova-Token: <ADMIN>` → `/api/health` `is_admin:true`, `GET /api/conversations` 200, `GET /api/gateway/keys` 200, `POST /api/chat` (provider `infron`, model `qwen/qwen3.8-27b:free`) → 200 `"Infron connection successful."`.
@@ -344,9 +344,11 @@ cd ~/NOVA_Project/frontend && npx vite build   # -> ../static  (no server restar
 
 Recent git log (master):
 ```
+ec568ec harden: disable openapi/docs; rate-limit unauth /v1/*; fix /mobile auth prose; +tests
+f00697d docs: comprehensive HANDOVER.md
 d5d8325 chore: gitignore .nova_tokens (operator token file)
 fa1d39f feat(auth/upload): combine upload button; admin-only key+history gating; is_admin in health
-5e3f755 readme: mark Infrar live, 47 tests green
+5e3f755 readme: mark Infrar live (configured:true + chat success), 47 tests green
 ```
 
 ---
@@ -381,4 +383,68 @@ fa1d39f feat(auth/upload): combine upload button; admin-only key+history gating;
 
 ---
 
-*End of handover. Repo root, `git pull` for code. Phone: `git pull --ff-only origin master` + uvicorn restart (or let the watchdog do it).*
+---
+
+## 16. Security hardening — applied after the 2026-10-01 pentest (commit `ec568ec`)
+
+A third party ran a black-box pentest against the public tunnel. Findings, response, and residual owner-actions.
+
+### 16.1 What was confirmed NOT a bug (no action needed)
+- Path confusion (`//`, `/./`, `%2f`, `;`, case, trailing) → all 401/404; the `auth_middleware` has no normalization gaps, no second public code path.
+- `Authorization: Bearer <NOVA_ADMIN_KEY>` on locked `/api/*` → still 401 "Locked" (correct — `/api/*` wants `X-Nova-Token`/cookie, not Bearer).
+- `X-API-Key`/`?api_key=`/`?key=` on `/v1/*` → rejected; Bearer-only.
+- Host-header tricks → Cloudflare returns 403 at the edge (origin fully proxied, no direct-connect leak; Cloudflare IPs only).
+- `X-Forwarded-For` spoofing → ineffective (CF bot-blocks the mangled TLS; real client IP reaches the app via `cf-connecting-ip`, unspoofable).
+- Session-cookie forgery → no error differentiation; `NOVA_AUTH_SECRET` never leaves the server (HMAC-SHA256 32-hex, 30-day).
+- Passphrase compare timing → noise-dominated (constant-time `hmac.compare_digest` in `_valid_session`, and the compare is on the HMAC sig not the passphrase).
+- File exposure (`.env`, `.git/HEAD`, `*.db`, backups) → none reachable; only intended static assets served.
+- Lock-exempt fuzz (`/metrics`, `/healthz`, `/actuator/*`) → no such routes exist.
+- Origin only exposed behind Cloudflare (named tunnel); no DNS A-record pointing straight at the phone.
+
+### 16.2 Fixes applied (commit `ec568ec`, live as of 2026-10-02)
+1. **Auto-docs off** — `app = FastAPI(..., docs_url=None, redoc_url=None, openapi_url=None)`. `/openapi.json`, `/docs`, `/redoc` → **404**. Closes the "hands the attacker the full route map incl. admin/restart" issue.
+2. **Rate-limit unauthenticated `/v1/*`** — new per-source-IP limiter (`NOVA_GATEWAY_IP_RATE_LIMIT`, default 60/min, env-tunable). Fires at the **401 path** (no/invalid bearer key), right before the 401 is raised in `GET /v1/models` and `POST /v1/chat/completions`. Keyed on `cf-connecting-ip` (Cloudflare edge) with a `request.client.host` fallback for direct (no-proxy) access — `X-Forwarded-For` is **not** trusted. This closes the `sk-nova-*` key-guess oracle (was 21 req/s unlimited). Valid keys keep their own per-key limiter (`_enforce_gateway_key_limits`) and are NOT double-counted.
+3. **`/mobile` description corrected** — the page (both `static/mobile.html` and `frontend/public/mobile.html`) previously claimed `/api/*` is gated by `Authorization: Bearer <NOVA_ADMIN_KEY>` and that "the key lives in `~/.env`." Two problems: (a) `NOVA_ADMIN_KEY` is **not a real variable** (it was invented prose — real auth is `NOVA_AUTH_PASSPHRASE` + `X-Nova-Token`), and (b) the header was wrong for `/api/*`. Rewritten to the accurate, non-leaky statement below (and the wrong header/var/path removed):
+   > GET `/api/health`, `/api/models`, `/mobile` are public. POST/PUT/DELETE on `/api/*` require a signed session (unlock via the lock screen; scripts send `X-Nova-Token`). The inference gateway `/v1/*` uses its own `Bearer sk-nova-…` keys (minted in the Gateway tab). Secrets stay server-side only — never sent to the browser.
+
+### 16.3 Live verification (public tunnel, after restart)
+| Check | Result |
+|---|---|
+| `GET /openapi.json` | **404** (was 200) |
+| `GET /docs` | **404** (was 200) |
+| `GET /v1/models` (no key) ×60 | 401, then **429** after the 60/min cap (burst of 65 → 56×401, 9×429) |
+| `GET /mobile` contains `NOVA_ADMIN_KEY` | **0** (gone) |
+| Admin `POST /api/chat` (`infrar`) | 200, "Infron connection successful." (RBAC intact) |
+
+Tests: `test_openapi_and_docs_disabled` (404s) and `test_gateway_unauthenticated_attempts_are_rate_limited` (3×401 then 429) added; full suite passes.
+
+### 16.4 Residual — owner action required
+- **Gateway key entropy** is entirely the owner's responsibility: keys are `sk-nova-` + `secrets.token_hex(24)` = 192 bits (brute-force hopeless). **Never hand-mint a word/hex key via `sk-nova-<guessing>`** — always use the Gateway tab, which generates `token_hex(24)`. The unthrottled→throttled window only buys time; entropy is the real defense.
+- The pentester's "passphrase at 20/min → ~3.5 days for a 100k dict" is bounded by `auth_login`'s existing 5-fail/60s lockout (429 "Too many attempts"). If you want it tighter, set a stronger passphrase and rotate `NOVA_AUTH_PASSPHRASE`.
+- `NOVA_AUTH_SECRET` (cookie signer) should be a long random string — if unset it falls back to the first passphrase, which is acceptable but not ideal; set it explicitly in `.env`.
+
+---
+
+## 17. Quick reference card (operator)
+
+```bash
+# Deploy a backend.py / mobile.html change to the phone
+ssh -i ~/.ssh/nova_phone_key -p 8022 u0_a318@192.168.0.6
+cd ~/NOVA_Project && git pull --ff-only origin master
+pkill -f 'uvicorn backend:app --host 0.0.0.0 --port 8000'; sleep 1
+set -a; . ./.env; set +a; export APP_HOST=0.0.0.0 APP_PORT=8000 NOVA_HISTORY_DB="$HOME/NOVA_Project/nova_history.db"
+nohup .venv/bin/python -m uvicorn backend:app --host 0.0.0.0 --port 8000 > nova-app.log 2>&1 &
+
+# Rebuild the SPA (frontend-only → no restart)
+cd ~/NOVA_Project/frontend && npx vite build && cd ..
+
+# Retrieve the admin/general tokens (YOUR terminal only; redacted from the agent)
+ssh -i ~/.ssh/nova_phone_key -p 8022 u0_a318@192.168.0.6 'cat ~/NOVA_Project/.nova_tokens'
+ssh -i ~/.ssh/nova_phone_key -p 8022 u0_a318@192.168.0.6 'sed -n "/^NOVA_AUTH_PASSPHRASE=/p" ~/NOVA_Project/.env'   # inspect (rename current token to general if bare/owner-named)
+
+# Smoke
+curl -s https://nova.terminalflaw.xyz/api/health                              # public, 200
+curl -s https://nova.terminalflaw.xyz/openapi.json -o /dev/null -w '%{http_code}\n'  # 404
+curl -s -o /dev/null -w '%{http_code}\n' https://nova.terminalflaw.xyz/docs           # 404
+python3 -m pytest tests/ -q     # 118 passed
+```
