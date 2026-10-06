@@ -747,3 +747,13 @@ def test_service_worker_uncached(client):
     cc = r.headers.get("Cache-Control", "")
     assert "no-store" in cc and "max-age=0" in cc          # CDN must revalidate — no stale SW
 
+
+def test_spa_shell_routes_uncached(client):
+    # HTML entry points (+ SW) have stable URLs, so they must be CDN-no-store
+    # or a stale shell is served after a deploy -> blank page (see §16/§17 handover).
+    for path in ("/", "/mobile", "/usage", "/sw.js"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        cc = r.headers.get("Cache-Control", "")
+        assert "no-store" in cc, f"{path} is CDN-cacheable -> blank-page risk: {cc!r}"
+

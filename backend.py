@@ -4763,22 +4763,33 @@ async def backup_import(request: Request, req: Dict[str, Any]):
 app.router.lifespan_context = lifespan
 
 
+def _no_store(resp):
+    """Stamp a no-store envelope on non-content-hashed entry points so a CDN
+    (Cloudflare) always revalidates these against origin instead of serving a
+    stale shell + stale service worker after a deploy — the cause of the recent
+    "blank page" outage. Content-hashed /assets/* bundles are left on long cache
+    (they cache-bust by URL on every build)."""
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return _no_store(FileResponse(STATIC_DIR / "index.html"))
 
 
 @app.get("/mobile")
 async def mobile_panel():
     """Mobile-first PWA status dashboard (provider dots live from /api/health)."""
-    return FileResponse(STATIC_DIR / "mobile.html")
+    return _no_store(FileResponse(STATIC_DIR / "mobile.html"))
 
 
 @app.get("/usage")
 async def usage_page():
     """Self-contained token-usage dashboard (vanilla JS, no build step).
     Pulls from /api/usage which persists across chat clears/deletes."""
-    return FileResponse(STATIC_DIR / "usage.html")
+    return _no_store(FileResponse(STATIC_DIR / "usage.html"))
 
 
 @app.get("/sw.js", include_in_schema=False)
@@ -4787,10 +4798,7 @@ async def service_worker():
     pin Cache-Control to no-store/no-cache. Otherwise a CDN caches one SW
     version for days and a stale SW (wrong cache name) lingers after a deploy —
     a classic cause of "shell + bundle load, then blank" PWA breakages."""
-    resp = FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    return resp
+    return _no_store(FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript"))
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
