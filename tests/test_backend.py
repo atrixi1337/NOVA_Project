@@ -739,3 +739,11 @@ def test_gateway_unauthenticated_attempts_are_rate_limited(client):
         backend.NOVA_GATEWAY_IP_RATE_LIMIT = saved_limit
         backend._GATEWAY_IP_HITS.clear()
 
+
+def test_service_worker_uncached(client):
+    r = client.get("/sw.js")
+    assert r.status_code == 200
+    assert "nova-shell-v2" in r.text                       # current SW version is served
+    cc = r.headers.get("Cache-Control", "")
+    assert "no-store" in cc and "max-age=0" in cc          # CDN must revalidate — no stale SW
+

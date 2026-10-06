@@ -4781,6 +4781,18 @@ async def usage_page():
     return FileResponse(STATIC_DIR / "usage.html")
 
 
+@app.get("/sw.js", include_in_schema=False)
+async def service_worker():
+    """The service worker has a stable URL (unlike content-hashed bundles), so
+    pin Cache-Control to no-store/no-cache. Otherwise a CDN caches one SW
+    version for days and a stale SW (wrong cache name) lingers after a deploy —
+    a classic cause of "shell + bundle load, then blank" PWA breakages."""
+    resp = FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
