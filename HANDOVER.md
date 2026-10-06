@@ -423,6 +423,14 @@ Tests: `test_openapi_and_docs_disabled` (404s) and `test_gateway_unauthenticated
 - The pentester's "passphrase at 20/min → ~3.5 days for a 100k dict" is bounded by `auth_login`'s existing 5-fail/60s lockout (429 "Too many attempts"). If you want it tighter, set a stronger passphrase and rotate `NOVA_AUTH_PASSPHRASE`.
 - `NOVA_AUTH_SECRET` (cookie signer) should be a long random string — if unset it falls back to the first passphrase, which is acceptable but not ideal; set it explicitly in `.env`.
 
+### 16.5 Blank-page postmortem (2026-10-06) — NOT a backend crash
+After the hardening deploy the public URL served a **blank page**. Diagnosed as follows (and fixed):
+- **Not** uvicorn / backend: `GET /api/health` → 200; the phone log showed the browser receiving `GET /` → 200 + `GET /assets/index-DnoTk1FO.js` → 200 (506 KB, syntax-valid, single content-hashed bundle) + `GET /sw.js` → 304. The "28 paths" the pentester saw in `/openapi.json` were already gone (now 404).
+- **Root cause:** a stale **Cloudflare edge cache** + stale **service worker**. StaticFiles had been serving `/` (index.html), `/sw.js`, `/mobile`, `/usage` with `Cache-Control: max-age=14400`. After deploys that changed `sw.js` (cache-name bump v1→v2), Cloudflare kept serving the old `nova-shell-v1` sw.js + old shell from edge for the full TTL, so the browser stayed under a stale SW whose cache held an empty/mismatched shell → blank page (classic "shell+bundle load, then nothing").
+- **Fix (commit `ea6d8a0`):** (a) SW cache name bumped `nova-shell-v1` → `nova-shell-v2` so a fresh install deletes the stale v1 cache; (b) `Cache-Control: no-store` stamped on the **non-content-hashed** entry points `/`, `/mobile`, `/usage`, `/sw.js` (a new `_no_store()` helper) so Cloudflare revalidates them against origin on every request — future deploys now auto-heal; (c) content-hashed `/assets/*` bundles keep long cache (safe — they cache-bust by URL).
+- **Verified at origin** (phone-local `127.0.0.1:8000`, bypassing the tunnel): `GET /` → `cache-control: no-store,…`, `GET /sw.js` → `cache-control: no-store,…` + `const CACHE = 'nova-shell-v2'`. Tests: `test_service_worker_uncached` + `test_spa_shell_routes_uncached`. Suite: **120 passed**.
+- **One operator step still required:** Cloudflare is currently serving a stale `/sw.js` (v1) + stale `/` from edge cache. The origin is correct, but the edge won't pick it up until its TTL lapses (~4h) **or you purge**. **Purge the zone cache once** (Cloudflare dashboard → Caching → Configuration → "Purge Everything", or purge the four URLs `/`, `/sw.js`, `/mobile`, `/usage`), then **hard-refresh** the browser (Ctrl+F5 / ⌘+Shift+R) so it fetches the fresh v2 SW → `skipWaiting` drops the stale v1 cache → the SPA mounts. No Cloudflare API token is available to this agent, so the purge must be done from your dashboard. After this one purge, deploys are self-healing (HTML + SW are no-store).
+
 ---
 
 ## 17. Quick reference card (operator)
