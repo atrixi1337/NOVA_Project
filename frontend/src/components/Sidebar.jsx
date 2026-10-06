@@ -73,6 +73,10 @@ export default function Sidebar({
   onDiff,
   onExportArchive,
   onImportArchive,
+  // App passes `admin` (health?.is_admin); must be destructured or it's a free
+  // variable -> ReferenceError -> silent blank page (caught by the root
+  // ErrorBoundary after it was added). Defaults to false for safety.
+  admin = false,
 }) {
   const [hovered, setHovered] = useState(null)
   const [renaming, setRenaming] = useState(null)
