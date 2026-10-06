@@ -1,10 +1,14 @@
 /* Sallaapam service worker — installable PWA + offline app shell.
+   v2 (2026-10-06): bumped from nova-shell-v1 -> nova-shell-v2 to force clients
+   to drop the stale v1 cache (it held a previous bundle + an empty shell, which
+   rendered a blank page after the /v1 rate-limit deploy). On next load, every
+   client's old nova-shell-v1 cache is deleted by the activate handler below.
    Strategy:
    - navigations: network-first (fresh bundles land immediately), cached shell
      as the offline fallback
    - hashed assets (/assets/*) + fonts + logo: cache-first (immutable content)
    - /api/*: never cached (always live) */
-const CACHE = 'nova-shell-v1';
+const CACHE = 'nova-shell-v2';
 const PRECACHE = ['/', '/logo.png', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
