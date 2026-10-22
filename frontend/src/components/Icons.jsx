@@ -125,3 +125,32 @@ export const Shield = ({ className = 'w-5 h-5' }) => (
       d="M9 12l2 2 3-3" />
   </svg>
 )
+
+export const MoreHorizontal = svg(
+  'M5 12h.01M12 12h.01M19 12h.01',
+  { strokeWidth: 2.5 },
+)
+export const Sun = svg(
+  'M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6l1.4 1.4m10 10l1.4 1.4m0-12.8l-1.4 1.4m-10 10l-1.4 1.4M16 12a4 4 0 11-8 0 4 4 0 018 0z'
+)
+export const Moon = svg(
+  'M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z'
+)
+export const Pin = svg(
+  'M12 17v5M9 10.76a2 2 0 01-1.11 1.79l-1.78.9A2 2 0 005 15.24V16a1 1 0 001 1h12a1 1 0 001-1v-.76a2 2 0 00-1.11-1.79l-1.78-.9A2 2 0 0115 10.76V7a1 1 0 011-1 2 2 0 000-4H8a2 2 0 000 4 1 1 0 011 1z'
+)
+export const Archive = svg(
+  'M3 5h18v4H3zM5 9v10a1 1 0 001 1h12a1 1 0 001-1V9M10 13h4'
+)
+export const Download = svg(
+  'M12 3v12m0 0l-4-4m4 4l4-4M4 21h16'
+)
+export const Fork = svg(
+  'M6 3v12a3 3 0 003 3h9M6 7a2 2 0 100-4 2 2 0 000 4zM18 15l3 3-3 3'
+)
+export const Compare = svg(
+  'M4 8h13m0 0l-3-3m3 3l-3 3M20 16H7m0 0l3-3m-3 3l3 3'
+)
+export const Database = svg(
+  'M12 3c4.42 0 8 1.34 8 3s-3.58 3-8 3-8-1.34-8-3 3.58-3 8-3zM4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6'
+)

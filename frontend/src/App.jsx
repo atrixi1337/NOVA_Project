@@ -46,8 +46,19 @@ const SECURITY_QUICK_PROMPTS = [
   'SIEM query to hunt lateral movement (KQL)',
 ]
 
-// Tab ids (order matters for the tab bar).
-const TABS = ['chat', 'arena', 'gateway', 'analyzer', 'bench', 'schedules', 'usage', 'host']
+// Tab bar items (order matters). Both the bar and the command palette read
+// from this one list so a new tab can't silently go missing from the UI.
+const TAB_ITEMS = [
+  ['chat', 'Chat'],
+  ['arena', 'Arena'],
+  ['gateway', 'Gateway'],
+  ['analyzer', 'Log Analyzer'],
+  ['bench', 'Benchmark'],
+  ['schedules', 'Schedules'],
+  ['usage', 'Usage'],
+  ['host', 'Host'],
+]
+const TABS = TAB_ITEMS.map(([id]) => id)
 
 // NovaSec persona prompt also lives in personas.js.
 
@@ -209,7 +220,15 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const textareaRef = useRef(null)
   const scrollRef = useRef(null)
+  const tabBarRef = useRef(null)
   const abortRef = useRef(null) // active chat request (stream or agent call)
+
+  // Keep the active tab visible in the scrollable tab strip (the strip is
+  // wider than a phone screen once all eight sections are rendered).
+  useEffect(() => {
+    const el = tabBarRef.current?.querySelector(`[data-tab="${tab}"]`)
+    el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [tab])
 
   // ── data loading ──
   useEffect(() => { loadModels() }, [])
@@ -862,7 +881,7 @@ export default function App() {
     items.push({ section: 'Actions', hint: 'new', label: 'New chat', run: () => { startNewChat() } })
     items.push({ section: 'Modes', hint: securityMode ? 'on' : 'off', label: securityMode ? 'Disable NovaSec' : 'Enable NovaSec', run: () => setSecurityMode((s) => !s) })
     items.push({ section: 'Modes', hint: malayalamMode ? 'on' : 'off', label: malayalamMode ? 'Disable Malayalam mode' : 'Enable Malayalam mode', run: () => setMalayalamMode((m) => !m) })
-    ;[['chat', 'Chat'], ['arena', 'Arena'], ['gateway', 'Gateway'], ['analyzer', 'Log Analyzer'], ['bench', 'Benchmark'], ['schedules', 'Schedules'], ['usage', 'Usage'], ['host', 'Host']].forEach(([id, label]) =>
+    ;TAB_ITEMS.forEach(([id, label]) =>
       items.push({ section: 'Navigate', hint: 'tab', label: `Go to ${label}`, run: () => setTab(id) }))
     Object.entries(providers).forEach(([pid, p]) =>
       items.push({ section: 'Providers', hint: 'switch', label: `Provider: ${p.label}`, run: () => switchProvider(pid) }))
@@ -961,21 +980,35 @@ export default function App() {
           host={host}
           theme={theme}
           onTheme={toggleTheme}
+          hideBrand={!sidebarCollapsed}
         />
 
         {/* Tabs (shrink-0: a tall tab body must never squash the bar to zero) */}
-        <div className="shrink-0 flex gap-0.5 sm:gap-1 px-2 sm:px-4 pt-2 border-b border-border bg-panel overflow-x-auto">
-          {[['chat', 'Chat'], ['arena', 'Arena'], ['gateway', 'Gateway'], ['analyzer', 'Log Analyzer'], ['usage', 'Usage'], ['host', 'Host']].map(([id, label]) => (
-            <button
-              key={id}
-              onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
-              className={`whitespace-nowrap px-2.5 sm:px-4 py-2 text-[12px] sm:text-[13px] font-medium rounded-t-lg border-b-2 transition-all
-                ${tab === id
-                  ? 'text-accent2 border-accent2 bg-panel2'
-                  : 'text-muted border-transparent hover:text-text hover:bg-panel2/60'}`}>
-              {label}
-            </button>
-          ))}
+        <div className="shrink-0 relative bg-panel border-b border-border">
+          <div
+            ref={tabBarRef}
+            role="tablist"
+            aria-label="Sections"
+            className="tabstrip flex gap-0.5 sm:gap-1 px-2 sm:px-4 pt-2 overflow-x-auto"
+          >
+            {TAB_ITEMS.map(([id, label]) => (
+              <button
+                key={id}
+                data-tab={id}
+                role="tab"
+                aria-selected={tab === id}
+                onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
+                className={`shrink-0 whitespace-nowrap px-2.5 sm:px-4 py-2 text-[12px] sm:text-[13px] font-medium rounded-t-lg border-b-2 transition-all
+                  ${tab === id
+                    ? 'text-accent2 border-accent2 bg-panel2'
+                    : 'text-muted border-transparent hover:text-text hover:bg-panel2/60'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* fade hint that the strip scrolls (phone widths only) */}
+          <div aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-panel to-transparent sm:hidden" />
         </div>
 
         {err && (
@@ -1138,8 +1171,9 @@ export default function App() {
                 <div className="flex items-center gap-1.5 mb-2">
                   <button
                     onClick={() => setSecurityMode((s) => !s)}
+                    aria-pressed={securityMode}
                     title="Security Mode (NovaSec)"
-                    className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] transition-colors ${
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
                       securityMode ? 'bg-accent2/15 text-accent2 border-accent2/40' : 'bg-panel2 text-muted border-border hover:text-text'
                     }`}
                   >
@@ -1147,17 +1181,19 @@ export default function App() {
                   </button>
                   <button
                     onClick={() => setMalayalamMode((m) => !m)}
+                    aria-pressed={malayalamMode}
                     title="Malayalam mode (routes via Gemini)"
-                    className={`px-2 py-0.5 rounded-full border text-[10px] transition-colors ${
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
                       malayalamMode ? 'bg-accent2/15 text-accent2 border-accent2/40' : 'bg-panel2 text-muted border-border hover:text-text'
                     }`}
                   >
-                    അ Malayalam
+                    <span className="text-[9px] font-semibold tracking-wider">ML</span> Malayalam
                   </button>
                   <button
                     onClick={() => setWebSearch((w) => !w)}
+                    aria-pressed={webSearch}
                     title="Let the model search the web (needs a function-calling model; others just answer without it)"
-                    className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] transition-colors ${
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
                       webSearch ? 'bg-accent2/15 text-accent2 border-accent2/40' : 'bg-panel2 text-muted border-border hover:text-text'
                     }`}
                   >
@@ -1191,7 +1227,7 @@ export default function App() {
                     onPaste={onPasteInto}
                     rows={1}
                     placeholder="Message Sallaapam…"
-                    className={`w-full resize-none bg-panel text-text border rounded-2xl pl-10 pr-[76px] py-3 text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40 ${
+                    className={`w-full resize-none bg-panel text-text border rounded-2xl pl-10 pr-[76px] py-3 text-[16px] sm:text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40 ${
                       dragOver ? 'border-accent/60' : 'border-border'
                     }`}
                   />
@@ -1208,7 +1244,7 @@ export default function App() {
                     <button
                       onClick={send}
                       disabled={!input.trim() && attachedImages.length === 0}
-                      className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-accent text-[#1a1000] font-semibold text-[13px] disabled:opacity-40 hover:brightness-90 transition-all flex items-center justify-center gap-1.5"
+                      className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-accent text-[#1a1000] font-semibold text-[13px] disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed hover:brightness-90 transition-all flex items-center justify-center gap-1.5"
                     >
                       <SendSolid className="w-4 h-4" />
                       <span>Send</span>

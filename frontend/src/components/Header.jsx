@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Gear } from './Icons.jsx'
+import { Gear, Sun, Moon } from './Icons.jsx'
 
 function Clock() {
   const [t, setT] = useState(() => new Date())
@@ -91,16 +91,27 @@ function HealthDot({ health, host }) {
   const ok = !!health && health.status === 'ok'
   const [pop, setPop] = useState(false)
   const hasHost = !!host
-  const toggle = hasHost ? () => setPop((p) => !p) : undefined
+  const label = ok
+    ? (hasHost ? 'Backend online — show host stats' : 'Backend online')
+    : 'Backend unreachable or unknown'
+  const dot = `inline-block w-2.5 h-2.5 rounded-full ${ok ? 'bg-ok' : 'bg-err animate-pulse'}`
+  if (!hasHost) {
+    return <span role="img" aria-label={label} title={label} className={dot} />
+  }
   return (
-    <>
-      <span
-        onClick={toggle}
-        title={ok ? 'Backend online — tap for host stats' : 'Backend unreachable / unknown'}
-        className={`inline-block w-2.5 h-2.5 rounded-full ${hasHost ? 'cursor-pointer' : ''} ${ok ? 'bg-ok' : 'bg-err animate-pulse'}`}
-      />
-      {pop && hasHost && <HostPopover host={host} onClose={() => setPop(false)} />}
-    </>
+    <div className="flex items-center">
+      <button
+        type="button"
+        onClick={() => setPop((p) => !p)}
+        aria-label={label}
+        aria-expanded={pop}
+        title={label}
+        className="p-1.5 -m-1.5 rounded-full hover:bg-panel2 transition-colors"
+      >
+        <span className={dot} />
+      </button>
+      {pop && <HostPopover host={host} onClose={() => setPop(false)} />}
+    </div>
   )
 }
 
@@ -108,7 +119,7 @@ function HealthDot({ health, host }) {
 // blinking indicator, a backend health dot, a provider quick-switch dropdown,
 // and a small-caps model read-out. Desktop also gets a live clock; on phones
 // the bar stays lean (no logo/clock) so nothing overlaps or clips.
-export default function Header({ onSettings, onMenu, providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health, host, theme = 'dark', onTheme }) {
+export default function Header({ onSettings, onMenu, providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health, host, theme = 'dark', onTheme, hideBrand = false }) {
   const hasProviders = onSwitchProvider && Object.keys(providers).length > 0
   return (
     <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 bg-panel border-b border-border">
@@ -118,6 +129,7 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
             onClick={onMenu}
             className="md:hidden p-1.5 -ml-1 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
             title="Open conversations"
+            aria-label="Open conversations"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -125,7 +137,7 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
             </svg>
           </button>
         )}
-        <span className="font-serif text-[15px] text-text2 whitespace-nowrap">
+        <span className={`font-serif text-[15px] text-text2 whitespace-nowrap ${hideBrand ? 'md:hidden' : ''}`}>
           Sallaapam<span className="text-accent animate-blink">●</span>
         </span>
       </div>
@@ -137,8 +149,9 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
             onClick={onTheme}
             className="p-1.5 -mr-1 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
             title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
           >
-            <span className="w-5 h-5 flex items-center justify-center text-[15px]">{theme === 'dark' ? '🌙' : '☀️'}</span>
+            {theme === 'dark' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
           </button>
         )}
         {hasProviders ? (
@@ -146,6 +159,7 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
             value={activeProvider || ''}
             onChange={(e) => onSwitchProvider(e.target.value)}
             title="Switch provider"
+            aria-label="Switch provider"
             className="min-w-0 max-w-[128px] sm:max-w-[240px] bg-panel border border-border rounded-lg pl-2 pr-1 py-1 text-[11px] small-caps text-text2 outline-none cursor-pointer hover:border-accent2 truncate"
           >
             {Object.entries(providers).map(([pid, p]) => (
@@ -168,6 +182,7 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
           onClick={onSettings}
           className="p-1.5 -mr-1 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
           title="Settings"
+          aria-label="Settings"
         >
           <Gear className="w-5 h-5" />
         </button>

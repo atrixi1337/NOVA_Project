@@ -130,7 +130,7 @@ export default function Arena({ providers = {}, health, malayalamMode = false, s
               <button
                 onClick={run}
                 disabled={!prompt.trim() || selected.length === 0}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold rounded-lg bg-accent text-[#1a1000] hover:brightness-105 disabled:opacity-40 transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold rounded-lg bg-accent text-[#1a1000] hover:brightness-105 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
               >
                 <SendSolid className="w-3.5 h-3.5" /> Run {selected.length > 1 ? selected.length : ''}
               </button>

@@ -24,15 +24,16 @@ export default function LockScreen({ onUnlock, busy = false, error = '' }) {
         value={pw}
         onChange={(e) => setPw(e.target.value)}
         placeholder="passphrase"
+        aria-label="Passphrase"
         autoFocus
         autoComplete="current-password"
-        className="w-full bg-panel text-text text-center border border-border rounded-xl px-3 py-2.5 text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50"
+        className="w-full bg-panel text-text text-center border border-border rounded-xl px-3 py-2.5 text-[16px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50"
       />
       {error && <div className="text-[12px] text-err">{error}</div>}
       <button
         type="submit"
         disabled={!pw.trim() || busy}
-        className="w-full py-2.5 rounded-xl bg-accent text-[#1a1000] font-semibold text-[13px] hover:brightness-90 disabled:opacity-40 transition-all"
+        className="w-full py-2.5 rounded-xl bg-accent text-[#1a1000] font-semibold text-[13px] hover:brightness-90 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
       >
         {busy ? 'Unlocking…' : 'Unlock'}
       </button>

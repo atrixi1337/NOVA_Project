@@ -56,7 +56,11 @@ export default function SettingsModal({
 }) {
   const [keys, setKeys] = useState({})
   const [saving, setSaving] = useState(false)
-  const inputRef = useRef(null)
+  const panelRef = useRef(null)
+  // Keep the latest onClose in a ref so the dialog effect below does not
+  // re-run (and steal focus) every time the parent re-renders.
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose }, [onClose])
   const [imgPrompt, setImgPrompt] = useState('')
   const [imgGenBusy, setImgGenBusy] = useState(false)
   const [imgGenError, setImgGenError] = useState('')
@@ -70,6 +74,29 @@ export default function SettingsModal({
 
   useEffect(() => {
     if (open) setKeys(loadKeys())
+  }, [open])
+
+  // Dialog behaviour: Esc closes, focus moves inside, Tab is trapped.
+  useEffect(() => {
+    if (!open) return
+    const el = panelRef.current
+    const prev = document.activeElement
+    const t = setTimeout(() => {
+      el?.querySelector('button, input, select, textarea, [href]')?.focus()
+    }, 0)
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); onCloseRef.current?.(); return }
+      if (e.key !== 'Tab' || !el) return
+      const items = [...el.querySelectorAll('button, input, select, textarea, [href]')]
+        .filter((n) => !n.disabled && n.offsetParent !== null)
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => { clearTimeout(t); window.removeEventListener('keydown', onKey); prev?.focus?.() }
   }, [open])
 
   if (!open) return null
@@ -96,13 +123,14 @@ export default function SettingsModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
          onClick={onClose}>
-      <div className="w-full max-w-lg bg-panel2 border border-border rounded-2xl shadow-2xl m-4 max-h-[85vh] overflow-y-auto"
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Settings"
+           className="w-full max-w-lg bg-panel2 border border-border rounded-2xl shadow-2xl m-4 max-h-[85vh] overflow-y-auto"
            onClick={(e) => e.stopPropagation()}>
 
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border">
           <h3 className="font-semibold text-[15px] text-text">Settings</h3>
-          <button onClick={onClose} className="p-1 text-muted hover:text-text rounded transition-colors">
+          <button onClick={onClose} aria-label="Close settings" title="Close settings" className="p-1 text-muted hover:text-text rounded transition-colors">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>

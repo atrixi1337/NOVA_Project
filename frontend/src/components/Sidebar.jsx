@@ -1,5 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react'
-import { ChevronLeft, ChevronRight, Search } from './Icons.jsx'
+import {
+  ChevronLeft, ChevronRight, ChevronDown, Search, MoreHorizontal,
+  Pin, Archive, Fork, Compare, Download, Database, Pencil, X,
+} from './Icons.jsx'
 
 function formatTime(ts) {
   if (!ts) return ''
@@ -87,6 +90,8 @@ export default function Sidebar({
   const inputRef = useRef(null)
   const archiveInputRef = useRef(null)
   const [showBackup, setShowBackup] = useState(false)
+  // Touch devices have no hover: a per-row menu expands inline instead.
+  const [menuOpen, setMenuOpen] = useState(null)
 
   useEffect(() => {
     if (renaming) {
@@ -96,6 +101,14 @@ export default function Sidebar({
   }, [renaming])
 
   useEffect(() => () => clearTimeout(confirmTimer.current), [])
+
+  // Escape closes the inline conversation menu.
+  useEffect(() => {
+    if (!menuOpen) return
+    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [menuOpen])
 
   // When full-text results are available they replace the local filter, since
   // they are strictly better (they see inside every message, not just titles).
@@ -162,6 +175,9 @@ export default function Sidebar({
   // Collapsed = desktop icon rail: labels hidden, conversation list becomes dots.
   const isRail = !!collapsed
 
+  const actionChip = 'flex items-center gap-1 px-2 py-1 rounded-md border border-border bg-panel text-[11px] text-muted hover:text-text hover:border-accent2/60 transition-colors'
+  const runAction = (e, fn) => { e.stopPropagation(); setMenuOpen(null); fn?.() }
+
   const deleteButton = (c) => (
     <button
       onClick={(e) => { e.stopPropagation(); handleDelete(c.id) }}
@@ -171,6 +187,7 @@ export default function Sidebar({
           : 'text-muted hover:text-err hover:bg-panel'
       }`}
       title={confirmDel === c.id ? 'Tap again to delete' : 'Delete (tap twice)'}
+      aria-label={confirmDel === c.id ? 'Confirm delete' : 'Delete conversation'}
     >
       {confirmDel === c.id ? (
         <span className="text-[9px] px-0.5 whitespace-nowrap">sure?</span>
@@ -194,7 +211,8 @@ export default function Sidebar({
       <div className="p-3 border-b border-border">
         <div className="flex items-center justify-between px-1 py-1">
           <div className="flex items-center gap-2.5">
-            <img src="/logo.png" alt="Sallaapam" className="w-7 h-7 object-contain" />
+            <span aria-hidden="true"
+              className={`w-2.5 h-2.5 rounded-full bg-accent shrink-0 ${isRail ? '' : 'hidden'}`} />
             <span className={`font-semibold text-[16px] text-text whitespace-nowrap ${isRail ? 'md:hidden' : ''}`}>
               Sallaapam
             </span>
@@ -203,6 +221,7 @@ export default function Sidebar({
             onClick={onToggleCollapse}
             className="p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors"
             title={isRail ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={isRail ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {isRail ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
           </button>
@@ -232,8 +251,8 @@ export default function Sidebar({
                 // F13: lift the query so App can run the debounced server search.
                 onSearchQuery?.(e.target.value)
               }}
-              placeholder="Search chats & messages…"
-              className="w-full bg-panel2 text-text text-[12px] pl-8 pr-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2 placeholder:text-muted/60"
+              placeholder="Search chats…"
+              className="w-full bg-panel2 text-text text-[16px] sm:text-[12px] pl-8 pr-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2 placeholder:text-muted/60"
             />
             {searchLoading && (
               <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-muted">
@@ -321,8 +340,8 @@ export default function Sidebar({
                       onMouseLeave={() => setHovered(null)}
                     >
                       <button
-                        onClick={() => { if (!isRenaming) { onSelect(c.id); onClose?.() } }}
-                        className="w-full text-left p-3 rounded-xl focus:outline-none"
+                        onClick={() => { if (!isRenaming) { onSelect(c.id); setMenuOpen(null); onClose?.() } }}
+                        className="w-full text-left p-3 pr-9 md:pr-3 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                       >
                         {isRenaming ? (
                           <input
@@ -383,29 +402,80 @@ export default function Sidebar({
                         )}
                       </button>
 
-                      {/* hover actions (only for non-active, non-renaming) */}
+                      {/* touch: one visible trigger per row, expanding an
+                          inline labelled action row (no hover on phones) */}
                       {!isRenaming && (
-                        <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity bg-panel2/80 rounded-lg">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setMenuOpen((m) => (m === c.id ? null : c.id)) }}
+                          aria-label={menuOpen === c.id ? 'Hide conversation actions' : 'Conversation actions'}
+                          aria-expanded={menuOpen === c.id}
+                          className="md:hidden absolute right-1.5 top-2 p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel transition-colors"
+                        >
+                          <MoreHorizontal className="w-4 h-4" />
+                        </button>
+                      )}
+                      {menuOpen === c.id && !isRenaming && (
+                        <div className="md:hidden flex flex-wrap gap-1 px-2 pb-2">
+                          <button onClick={(e) => runAction(e, () => onTogglePin?.(c.id, c.pinned))} className={actionChip}>
+                            <Pin className="w-3 h-3" /> {c.pinned ? 'Unpin' : 'Pin'}
+                          </button>
+                          <button onClick={(e) => runAction(e, () => onToggleArchive?.(c.id, c.archived))} className={actionChip}>
+                            <Archive className="w-3 h-3" /> {c.archived ? 'Unarchive' : 'Archive'}
+                          </button>
+                          <button onClick={(e) => runAction(e, () => onFork?.(c.id))} className={actionChip}>
+                            <Fork className="w-3 h-3" /> Fork
+                          </button>
+                          {c.parent_id && (
+                            <button onClick={(e) => runAction(e, () => onDiff?.(c.id, c.parent_id))} className={actionChip}>
+                              <Compare className="w-3 h-3" /> Compare
+                            </button>
+                          )}
+                          <button onClick={(e) => runAction(e, () => onExport?.(c.id, 'md'))} className={actionChip}>
+                            <Download className="w-3 h-3" /> Export
+                          </button>
+                          <button onClick={(e) => runAction(e, () => startRename(c.id, c.title))} className={actionChip}>
+                            <Pencil className="w-3 h-3" /> Rename
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              const wasArmed = confirmDel === c.id
+                              handleDelete(c.id)
+                              if (wasArmed) setMenuOpen(null)
+                            }}
+                            className={`${actionChip} ${confirmDel === c.id ? 'text-err border-err/50' : 'hover:text-err'}`}
+                          >
+                            <X className="w-3 h-3" /> {confirmDel === c.id ? 'Sure?' : 'Delete'}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* desktop hover actions */}
+                      {!isRenaming && (
+                        <div className="hidden md:flex absolute right-1 top-1/2 -translate-y-1/2 items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity bg-panel2/80 rounded-lg">
                           <button
                             onClick={(e) => { e.stopPropagation(); onTogglePin?.(c.id, c.pinned) }}
                             className="p-1 rounded-md text-muted hover:text-accent hover:bg-panel transition-colors"
                             title={c.pinned ? 'Unpin' : 'Pin'}
+                            aria-label={c.pinned ? 'Unpin conversation' : 'Pin conversation'}
                           >
-                            <span className="w-4 h-4 flex items-center justify-center text-[13px]">{c.pinned ? '📌' : '📍'}</span>
+                            <Pin className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); onToggleArchive?.(c.id, c.archived) }}
                             className="p-1 rounded-md text-muted hover:text-err hover:bg-panel transition-colors"
                             title={c.archived ? 'Unarchive' : 'Archive'}
+                            aria-label={c.archived ? 'Unarchive conversation' : 'Archive conversation'}
                           >
-                            <span className="w-4 h-4 flex items-center justify-center text-[13px]">{c.archived ? '📤' : '🗄️'}</span>
+                            <Archive className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); onFork?.(c.id) }}
                             className="p-1 rounded-md text-muted hover:text-accent2 hover:bg-panel transition-colors"
                             title="Fork: copy this conversation into a new branch"
+                            aria-label="Fork conversation"
                           >
-                            <span className="w-4 h-4 flex items-center justify-center text-[13px]">⑂</span>
+                            <Fork className="w-3.5 h-3.5" />
                           </button>
                           {/* F22: only meaningful when this fork has a parent. */}
                           {c.parent_id && (
@@ -413,26 +483,26 @@ export default function Sidebar({
                               onClick={(e) => { e.stopPropagation(); onDiff?.(c.id, c.parent_id) }}
                               className="p-1 rounded-md text-muted hover:text-accent hover:bg-panel transition-colors"
                               title="Compare this fork against its parent"
+                              aria-label="Compare with parent"
                             >
-                              <span className="w-4 h-4 flex items-center justify-center text-[13px]">⇄</span>
+                              <Compare className="w-3.5 h-3.5" />
                             </button>
                           )}
                           <button
                             onClick={(e) => { e.stopPropagation(); onExport?.(c.id, 'md') }}
                             className="p-1 rounded-md text-muted hover:text-text hover:bg-panel transition-colors"
                             title="Export as Markdown"
+                            aria-label="Export as Markdown"
                           >
-                            <span className="w-4 h-4 flex items-center justify-center text-[13px]">⬇️</span>
+                            <Download className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={() => startRename(c.id, c.title)}
                             className="p-1 rounded-md text-muted hover:text-text hover:bg-panel transition-colors"
                             title="Rename"
+                            aria-label="Rename conversation"
                           >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-5-9l-7 7v3h3l7-7m-3-1l3-3m0 0l2.5-2.5M17 2l5 5-3 3-5-5 3-3z" />
-                            </svg>
+                            <Pencil className="w-3.5 h-3.5" />
                           </button>
                           {deleteButton(c)}
                         </div>
@@ -488,8 +558,9 @@ export default function Sidebar({
             className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] text-muted hover:text-text hover:bg-panel2 rounded-xl transition-colors mb-1
               ${isRail ? 'justify-center' : 'justify-start'}`}
             title="Backup & restore"
+            aria-label="Backup & restore"
           >
-            <span className="w-4 h-4 flex items-center justify-center text-[13px]">{showBackup ? '▾' : '💾'}</span>
+            {showBackup ? <ChevronDown className="w-4 h-4" /> : <Database className="w-4 h-4" />}
             <span className={isRail ? 'md:hidden' : ''}>Backup</span>
           </button>
         )}
@@ -497,6 +568,7 @@ export default function Sidebar({
           onClick={() => { onSettings(); onClose?.() }}
           className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] text-muted hover:text-text hover:bg-panel2 rounded-xl transition-colors
             ${isRail ? 'justify-center' : 'justify-start'}`}
+          aria-label="Settings"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
