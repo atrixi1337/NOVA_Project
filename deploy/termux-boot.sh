@@ -1,4 +1,4 @@
-#!/data/data/com/termin/files/usr/bin/bash
+#!/data/data/com.termux/files/usr/bin/bash
 # Termux:Boot autostart for the NOVA phone deploy (Cloudflare-only).
 # Install Termux:Boot (F-Droid), grant Storage+Run-at-startup, then on every
 # reboot Termux runs ~/.termux/boot/*.sh: re-launches uvicorn + the Cloudflare
@@ -7,6 +7,7 @@
 # deploy/phone-deploy.sh once manually first).
 set -uo pipefail
 termux-wake-lock 2>/dev/null || true
+sshd 2>/dev/null || true   # keep SSH (8022) reachable after reboot
 sleep 3
 
 D="$HOME/NOVA_Project"
