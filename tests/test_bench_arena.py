@@ -367,3 +367,24 @@ def test_judge_has_its_own_lane_and_progress_counts_answers(client, keyed, monke
     v = _wait(client, r.json()["job_id"])
     assert v["status"] == "done" and v["done"] == v["answered"] == v["total"]
     assert active["max_judge"] > 1          # judge calls ran in parallel despite the provider cap of 1
+
+
+def test_alert_tasks_and_grounding():
+    import bench_suites as bs
+    al = [{"rule": {"id": "5710", "level": 10, "description": "sshd: attempt from 10.1.1.9"}, "full_log": "Failed password from 10.1.1.9"}]
+    t = bs.alert_tasks(al)
+    assert len(t) == 1 and t[0]["checks"][-1]["type"] == "grounded_iocs"
+    ok = '{"verdict":"true_positive","severity":60,"summary":"from 10.1.1.9"}'
+    bad = '{"verdict":"true_positive","severity":60,"summary":"from 8.8.8.8"}'
+    assert bs.run_checks(ok, t[0]["checks"])["passed"] == 4
+    assert bs.run_checks(bad, t[0]["checks"])["passed"] == 3
+
+
+def test_sample_alerts_stratified():
+    import bench_suites as bs
+    mk = lambda i, l, d: {"rule": {"id": str(i), "level": l, "description": d}}
+    pool = [mk(1, 12, "bad a"), mk(2, 10, "bad b")] + [mk(3, 3, f"noise {i}") for i in range(50)] + [mk(4, 3, "other noise")]
+    got = bs.sample_alerts(pool, n=4)
+    ids = [a["rule"]["id"] for a in got]
+    assert "1" in ids and "2" in ids and len(got) <= 4
+    assert len([a for a in got if a["rule"]["id"] == "3"]) <= 1   # numeric variants deduped

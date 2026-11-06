@@ -466,6 +466,8 @@ Inception `mercury-2` deprecated -> `mercury-3`. Still failing on the dev box (c
 resource/account ids, HuggingFace Router needs prepaid credits (402), Reka 403, GMI/Infron have no key. **The phone's `.env` still carries its own
 model-list overrides - sync `MISTRAL_MODELS`, `NVIM_*`, `AGNES_*`, `COHERE_MODELS` there** (code defaults only apply when the var is unset).
 
+**Real SOC alerts (2026-11-06).** Benchmark suite "Real SOC alerts": `GET /api/bench/alerts/sample` samples live Wazuh alerts (dedupe by rule, ~half high-severity, rest benign noise) from `NOVA_WAZUH_CONTAINER` (docker, laptop only) or `NOVA_WAZUH_ALERTS_FILE`; the UI can also paste JSON/JSONL. `POST /api/bench/jobs {alerts:[...]}` makes one triage task per alert using the triage-agent prompt. No ground truth exists, so grading = code checks (valid JSON, enum verdict, severity range, `grounded_iocs`: every IP/hash cited must appear in the alert) + judge scoring evidence-bound reasoning. The phone has no Wazuh/docker: use paste or point the file var at an export.
+
 ## 18. Quick reference card (operator)
 
 ```bash

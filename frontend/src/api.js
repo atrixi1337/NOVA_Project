@@ -209,6 +209,7 @@ export const api = {
   benchSuites: () => jget('/api/bench/suites'),
   benchJobCreate: (body) => jpost('/api/bench/jobs', body),
   benchJob: (id, full = false) => jget(`/api/bench/jobs/${id}${full ? '?full=1' : ''}`),
+  benchAlertSample: (n, minLevel) => jget(`/api/bench/alerts/sample?n=${n}&min_level=${minLevel}`),
   benchJobs: (limit = 30) => jget(`/api/bench/jobs?limit=${limit}`),
   benchJobCancel: (id) => jpost(`/api/bench/jobs/${id}/cancel`, {}),
   benchJobDelete: (id) => jdel(`/api/bench/jobs/${id}`),

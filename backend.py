@@ -4497,6 +4497,7 @@ class BenchJobCreate(BaseModel):
     label: str = ""
     suite_id: str = "soc"
     tasks: Optional[List[Dict[str, Any]]] = None   # custom suite: [{prompt, rubric?, title?}]
+    alerts: Optional[List[Dict[str, Any]]] = None   # real Wazuh alerts -> one triage task each
     contenders: List[BenchContender]
     judge: Optional[BenchContender] = None          # None = no LLM judge (deterministic checks only)
     concurrency: Optional[int] = None
@@ -4653,11 +4654,65 @@ async def _bench_job_run(job: Dict[str, Any], tasks: List[Dict[str, Any]], extra
         _bench_persist(job)
 
 
+# ---- real SOC alerts as benchmark input -------------------------------------
+# Source (first that is set): NOVA_WAZUH_ALERTS_FILE (path to Wazuh alerts.json / a JSONL
+# export) or NOVA_WAZUH_CONTAINER (docker container name; runs a read-only `tail` of
+# /var/ossec/logs/alerts/alerts.json). The phone has no docker: set the file path there
+# or paste/upload alerts in the UI (they arrive in the job body).
+NOVA_WAZUH_ALERTS_FILE = os.getenv("NOVA_WAZUH_ALERTS_FILE", "").strip()
+NOVA_WAZUH_CONTAINER = os.getenv("NOVA_WAZUH_CONTAINER", "").strip()
+NOVA_WAZUH_TAIL = int(os.getenv("NOVA_WAZUH_TAIL", "6000"))
+
+
+def _read_wazuh_alerts(tail: int) -> List[Dict[str, Any]]:
+    import subprocess
+    lines: List[str] = []
+    if NOVA_WAZUH_ALERTS_FILE:
+        with open(NOVA_WAZUH_ALERTS_FILE, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 40_000_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()[-tail:]
+    elif NOVA_WAZUH_CONTAINER:
+        r = subprocess.run(["docker", "exec", NOVA_WAZUH_CONTAINER, "tail", "-n", str(tail),
+                            "/var/ossec/logs/alerts/alerts.json"], capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            raise RuntimeError((r.stderr or "docker exec failed")[:200])
+        lines = r.stdout.splitlines()
+    out = []
+    for ln in lines:
+        try:
+            a = json.loads(ln)
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(a, dict) and isinstance(a.get("rule"), dict):
+            out.append(a)
+    return out
+
+
+@app.get("/api/bench/alerts/sample")
+async def bench_alerts_sample(request: Request, n: int = 12, min_level: int = 0):
+    _check_actor_limits(request)
+    if not (NOVA_WAZUH_ALERTS_FILE or NOVA_WAZUH_CONTAINER):
+        return {"configured": False, "alerts": [],
+                "hint": "Set NOVA_WAZUH_ALERTS_FILE or NOVA_WAZUH_CONTAINER on the server, or paste alerts JSON in the UI."}
+    try:
+        allx = await asyncio.to_thread(_read_wazuh_alerts, NOVA_WAZUH_TAIL)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Could not read Wazuh alerts: {e}")
+    picked = bs.sample_alerts(allx, max(1, min(int(n), 40)), max(0, int(min_level)))
+    return {"configured": True, "scanned": len(allx), "alerts": picked}
+
+
 @app.post("/api/bench/jobs")
 async def bench_job_create(request: Request, body: BenchJobCreate):
     _check_actor_limits(request)
     actor = getattr(request.state, "actor", "") or ""
-    if body.tasks is not None:
+    if body.alerts is not None:
+        if len(body.alerts) > 60:
+            raise HTTPException(400, "Max 60 alerts per run.")
+        tasks, suite_id = bs.alert_tasks(body.alerts), "alerts"
+    elif body.tasks is not None:
         tasks, suite_id = bs.custom_tasks(body.tasks), "custom"
     else:
         suite = bs.SUITES.get(body.suite_id)

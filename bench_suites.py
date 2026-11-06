@@ -414,6 +414,92 @@ def custom_tasks(raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Real alerts (from a live Wazuh) -> triage tasks
+# ---------------------------------------------------------------------------
+
+_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_HASH_RE = re.compile(r"\b(?:[a-fA-F0-9]{64}|[a-fA-F0-9]{40}|[a-fA-F0-9]{32})\b")
+
+
+def slim_alert(a: Dict[str, Any], limit: int = 6000) -> Dict[str, Any]:
+    """Drop bulky/duplicated Wazuh fields so the prompt stays small but keeps all evidence."""
+    a = json.loads(json.dumps(a))
+    for k in ("decoder", "location", "manager", "cluster", "input", "previous_output"):
+        a.pop(k, None)
+    if len(json.dumps(a)) > limit:
+        fl = a.get("full_log")
+        if isinstance(fl, str):
+            a["full_log"] = fl[: max(500, limit // 2)] + "...[truncated]"
+    return a
+
+
+def alert_tasks(alerts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One triage task per REAL alert. No ground truth exists, so grading = deterministic
+    format/grounding checks + a judge who sees the alert and scores evidence-bound reasoning."""
+    out = []
+    for i, raw in enumerate(alerts or [], 1):
+        if not isinstance(raw, dict):
+            continue
+        a = slim_alert(raw)
+        rule = a.get("rule") or {}
+        lvl = rule.get("level", "?")
+        desc = str(rule.get("description") or "alert")[:70]
+        src = json.dumps(a)
+        out.append({
+            "id": f"alert-{i}", "category": "Real alerts",
+            "title": f"[L{lvl}] {desc}",
+            "messages": _msgs(TRIAGE_SYSTEM, _triage_prompt(a)),
+            "rubric": [
+                f"Correctly reads what actually happened per the alert (rule '{desc}', Wazuh level {lvl}) without inventing hosts, users, IOCs or events",
+                "Verdict is defensible: routine/benign OS or service activity is false_positive (or needs_context); real attacker-like behaviour is true_positive; missing evidence is needs_context",
+                "Severity is proportionate to the evidence, not just copied from the Wazuh level",
+                "Playbook is concrete, ordered and specific to this alert (not generic boilerplate)",
+                "Output is strict JSON matching the schema",
+            ],
+            "checks": [
+                {"type": "json_valid", "label": "valid JSON"},
+                {"type": "json_field", "path": "verdict", "in": ["true_positive", "false_positive", "needs_context"], "label": "verdict is a valid enum"},
+                {"type": "json_range", "path": "severity", "min": 0, "max": 100, "label": "severity 0-100"},
+                {"type": "grounded_iocs", "source": src, "label": "every IP/hash cited is in the alert (no invented IOCs)"},
+            ],
+            "alert": a,
+        })
+    return out
+
+
+def sample_alerts(alerts: List[Dict[str, Any]], n: int = 12, min_level: int = 0) -> List[Dict[str, Any]]:
+    """Stratified sample: dedupe by rule+description shape, keep the high-severity ones first
+    (about half the slots), then fill with distinct low-level rules so benign noise is tested too."""
+    seen, uniq = set(), []
+    for a in alerts:
+        r = (a or {}).get("rule") or {}
+        try:
+            lvl = int(r.get("level", 0))
+        except Exception:  # noqa: BLE001
+            lvl = 0
+        if lvl < min_level:
+            continue
+        shape = re.sub(r"\d+", "#", str(r.get("description", "")))[:60]
+        key = (r.get("id"), shape)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append((lvl, a))
+    uniq.sort(key=lambda x: -x[0])
+    hi = [a for l, a in uniq if l >= 7]
+    lo = [a for l, a in uniq if l < 7]
+    take_hi = hi[: max(1, n // 2)] if hi else []
+    rest = n - len(take_hi)
+    step = max(1, len(lo) // max(1, rest))
+    take_lo = lo[::step][:rest]
+    picked = take_hi + take_lo
+    if len(picked) < n:
+        extra = [a for l, a in uniq if a not in picked]
+        picked += extra[: n - len(picked)]
+    return picked[:n]
+
+
+# ---------------------------------------------------------------------------
 # deterministic checks
 # ---------------------------------------------------------------------------
 
@@ -489,6 +575,10 @@ def run_check(text: str, check: Dict[str, Any]) -> bool:
     if kind == "equals":
         norm = re.sub(r"[\s\"'`.!]+", "", t).lower()
         return norm == re.sub(r"[\s\"'`.!]+", "", str(check["value"])).lower()
+    if kind == "grounded_iocs":
+        src = str(check.get("source", ""))
+        found = set(_IP_RE.findall(t)) | set(h.lower() for h in _HASH_RE.findall(t))
+        return all(x.lower() in src.lower() for x in found)
     data = extract_json(t)
     if kind == "json_valid":
         return data is not None and isinstance(data, (dict, list))

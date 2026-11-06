@@ -21,6 +21,10 @@ export default function BenchArena({ providers = {}, health, malayalamMode, secu
   const [meta, setMeta] = useState(null)             // suites + judge suggestions + limits
   const [suiteId, setSuiteId] = useState('soc')
   const [custom, setCustom] = useState('')
+  const [alerts, setAlerts] = useState([])         // real Wazuh alerts used as the task set
+  const [alertSrc, setAlertSrc] = useState({ n: 12, minLevel: 0, scanned: 0, note: '' })
+  const [pasteAlerts, setPasteAlerts] = useState('')
+  const [loadingAlerts, setLoadingAlerts] = useState(false)
   const [selected, setSelected] = useState({})
   const [judgeKey, setJudgeKey] = useState(null)     // null = not chosen yet, '' = no judge
   const [label, setLabel] = useState('')
@@ -60,7 +64,25 @@ export default function BenchArena({ providers = {}, health, malayalamMode, secu
 
   const suite = meta?.suites?.find((s) => s.id === suiteId)
   const customTasks = useMemo(() => (suiteId === 'custom' ? parseCustom(custom) : []), [suiteId, custom])
-  const nTasks = suiteId === 'custom' ? customTasks.length : suite?.tasks?.length || 0
+  const nTasks = suiteId === 'alerts' ? alerts.length : suiteId === 'custom' ? customTasks.length : suite?.tasks?.length || 0
+
+  const loadAlerts = async () => {
+    setLoadingAlerts(true); setErr('')
+    try {
+      const r = await api.benchAlertSample(alertSrc.n, alertSrc.minLevel)
+      if (!r.configured) setAlertSrc((a) => ({ ...a, note: r.hint }))
+      else { setAlerts(r.alerts || []); setAlertSrc((a) => ({ ...a, scanned: r.scanned, note: '' })) }
+    } catch (e) { setErr(e.message) } finally { setLoadingAlerts(false) }
+  }
+  const parsePaste = () => {
+    const t = pasteAlerts.trim()
+    let arr = []
+    try { const j = JSON.parse(t); arr = Array.isArray(j) ? j : [j] }
+    catch { arr = t.split('\n').map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean) }
+    arr = arr.filter((a) => a && typeof a === 'object' && a.rule).slice(0, 60)
+    if (!arr.length) setErr('No Wazuh alerts found in the pasted text (need JSON / JSONL with a "rule" object).')
+    else { setErr(''); setAlerts(arr); setAlertSrc((a) => ({ ...a, scanned: arr.length, note: '' })) }
+  }
   const nContenders = Object.keys(selected).length
   const judgeOn = !!judgeKey
   const calls = nContenders * nTasks * (judgeOn ? 2 : 1)
@@ -92,7 +114,8 @@ export default function BenchArena({ providers = {}, health, malayalamMode, secu
         concurrency: Number(conc) || undefined,
         max_tokens: Number(maxTok) || undefined,
       }
-      if (suiteId === 'custom') body.tasks = customTasks
+      if (suiteId === 'alerts') body.alerts = alerts
+      else if (suiteId === 'custom') body.tasks = customTasks
       else body.suite_id = suiteId
       const r = await api.benchJobCreate(body)
       setJobId(r.job_id); setView(null)
@@ -156,12 +179,51 @@ export default function BenchArena({ providers = {}, health, malayalamMode, secu
                       {s.name} <span className="opacity-70">· {s.tasks.length}</span>
                     </button>
                   ))}
+                  <button disabled={running} onClick={() => setSuiteId('alerts')} aria-pressed={suiteId === 'alerts'}
+                    className={`px-3 py-1.5 rounded-full border text-[12px] transition-colors ${suiteId === 'alerts' ? 'bg-accent text-white border-accent' : 'bg-panel2 text-muted border-border/60 hover:text-text'}`}>
+                    Real SOC alerts
+                  </button>
                   <button disabled={running} onClick={() => setSuiteId('custom')} aria-pressed={suiteId === 'custom'}
                     className={`px-3 py-1.5 rounded-full border text-[12px] transition-colors ${suiteId === 'custom' ? 'bg-accent text-white border-accent' : 'bg-panel2 text-muted border-border/60 hover:text-text'}`}>
                     Custom
                   </button>
                 </div>
-                {suiteId === 'custom' ? (
+                {suiteId === 'alerts' ? (
+                  <div className="space-y-2">
+                    <p className="text-[11.5px] text-muted">Live alerts from your Wazuh. Each model triages every alert with the same prompt your triage agent uses; the judge scores evidence-bound reasoning and code checks that no IP/hash was invented.</p>
+                    <div className="flex flex-wrap items-end gap-2 text-[12px]">
+                      <label className="text-muted">alerts
+                        <input type="number" min="1" max="40" value={alertSrc.n} onChange={(e) => setAlertSrc((a) => ({ ...a, n: e.target.value }))}
+                          className="ml-1 w-14 bg-bg border border-border rounded-lg px-2 py-1 text-text outline-none focus:border-accent" /></label>
+                      <label className="text-muted">min level
+                        <input type="number" min="0" max="15" value={alertSrc.minLevel} onChange={(e) => setAlertSrc((a) => ({ ...a, minLevel: e.target.value }))}
+                          className="ml-1 w-14 bg-bg border border-border rounded-lg px-2 py-1 text-text outline-none focus:border-accent" /></label>
+                      <button onClick={loadAlerts} disabled={running || loadingAlerts}
+                        className="px-3 py-1.5 rounded-full bg-accent text-white disabled:opacity-50">{loadingAlerts ? 'Sampling…' : alerts.length ? 'Re-sample from Wazuh' : 'Sample from Wazuh'}</button>
+                    </div>
+                    {alertSrc.note && <p className="text-[11.5px] text-accent2">{alertSrc.note}</p>}
+                    <details className="text-[11.5px] text-muted">
+                      <summary className="cursor-pointer hover:text-text">…or paste alerts (JSON / JSONL)</summary>
+                      <textarea value={pasteAlerts} onChange={(e) => setPasteAlerts(e.target.value)} rows={4}
+                        className="mt-1 w-full resize-y bg-bg border border-border rounded-2xl px-3 py-2 text-[12px] outline-none focus:border-accent" />
+                      <button onClick={parsePaste} className="mt-1 px-3 py-1 rounded-full border border-border hover:text-text">Use pasted alerts</button>
+                    </details>
+                    {alerts.length > 0 && (
+                      <>
+                        <p className="text-[11.5px] text-muted">{alerts.length} real alerts{alertSrc.scanned ? ` (from ${alertSrc.scanned} recent)` : ''}</p>
+                        <ul className="space-y-1 max-h-56 overflow-y-auto pr-1">
+                          {alerts.map((a, i) => (
+                            <li key={i} className="rounded-xl bg-bg/40 border border-border/40 px-3 py-1.5 text-[11.5px] text-text2 flex gap-2">
+                              <span className={`shrink-0 font-mono ${a.rule.level >= 10 ? 'text-err' : a.rule.level >= 7 ? 'text-accent2' : 'text-muted'}`}>L{a.rule.level}</span>
+                              <span className="truncate" title={a.rule.description}>{a.rule.description}</span>
+                              <span className="ml-auto shrink-0 text-muted">{a.agent?.name || ''}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+                ) : suiteId === 'custom' ? (
                   <div className="space-y-1">
                     <textarea value={custom} onChange={(e) => setCustom(e.target.value)} rows={5} disabled={running}
                       placeholder={'One task per line. Optional rubric after ||\nExplain DNS tunnelling in 3 sentences || mentions covert channel, long TXT queries, detection via entropy'}
