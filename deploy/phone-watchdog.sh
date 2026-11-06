@@ -65,9 +65,23 @@ start_uvicorn() (
     --host 0.0.0.0 --port 8000 < /dev/null >> "$APP_DIR/nova-app.log" 2>&1 &
 )
 
+# Keep the named Cloudflare tunnel alive too: if no cloudflared process is
+# running, the public URL returns error 1033 even when uvicorn is healthy.
+CF_CONFIG="$HOME/.cloudflared/config.yml"
+ensure_tunnel() {
+  [ -f "$CF_CONFIG" ] || return 0
+  if ! pgrep -f '[c]loudflared tunnel' >/dev/null 2>&1; then
+    log "cloudflared not running — starting named tunnel"
+    nohup cloudflared tunnel --config "$CF_CONFIG" --no-autoupdate run nova \
+      < /dev/null >> "$APP_DIR/nova-tunnel.log" 2>&1 &
+    notify "Nova: cloudflared tunnel was down, watchdog restarted it"
+  fi
+}
+
 fails=0
 last_rotate=0
 while true; do
+  ensure_tunnel
   now=$(date +%s)
   if [ $((now - last_rotate)) -ge "$ROTATE_CHECK_INTERVAL" ]; then
     last_rotate=$now

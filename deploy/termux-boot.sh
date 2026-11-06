@@ -21,7 +21,14 @@ pkill -f 'cloudflared tunnel'   2>/dev/null || true
 sleep 1
 
 nohup ./.venv/bin/python -m uvicorn backend:app --host 0.0.0.0 --port 8000 > "$D/nova-app.log" 2>&1 &
-nohup cloudflared tunnel --url http://localhost:8000 --no-autoupdate --logfile "$D/nova-tunnel.log" > "$D/nova-tunnel.out" 2>&1 &
+# Prefer the stable NAMED tunnel (nova.terminalflaw.xyz). Starting a quick tunnel
+# here instead leaves the named tunnel with no connector -> Cloudflare error 1033.
+if [ -f "$HOME/.cloudflared/config.yml" ]; then
+  nohup cloudflared tunnel --config "$HOME/.cloudflared/config.yml" --no-autoupdate run nova \
+    > "$D/nova-tunnel.log" 2>&1 &
+else
+  nohup cloudflared tunnel --url http://localhost:8000 --no-autoupdate --logfile "$D/nova-tunnel.log" > "$D/nova-tunnel.out" 2>&1 &
+fi
 
 # surface the public URL when ready (quick tunnels regenerate this on each start)
 for i in $(seq 1 40); do
