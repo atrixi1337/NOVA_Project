@@ -81,7 +81,7 @@ NOVA_Project/
 | Repo | `~/NOVA_Project`, origin `https://github.com/atrixi1337/NOVA_Project.git` (master), HEAD `fa1d39f` (app code) / `d5d8325` (master, +gitignore) |
 | App log | `~/NOVA_Project/nova-app.log` |
 | History DB | `~/NOVA_Project/nova_history.db` (SQLite, WAL; **do not edit while uvicorn runs** — snapshots via `phone-snapshot-db.py` only) |
-| Default provider | `inception` (`DEFAULT_PROVIDER=inception`; model `mercury-2`) |
+| Default provider | `inception` (`DEFAULT_PROVIDER=inception`; model `mercury-3`) |
 | Live Infrar key | `INFRON_API_KEY=51 chars`, provider id `infron`, model `qwen/qwen3.8-27b:free` |
 | Auth | `NOVA_AUTH_PASSPHRASE` holds named tokens: `owner:<ADMIN>`, `alice:<ALICE>`, plus the operator's pre-existing entries |
 | Tokens file | `~/NOVA_Project/.nova_tokens` (chmod 600) contains `ADMIN=<owner/admin>` and `ALICE=<general>` — retrieve via `ssh … 'cat ~/.nova_tokens'`; values are redacted in this agent's view but visible in your own terminal |
@@ -241,7 +241,7 @@ Provider resolution (`_prepare_chat`, line ~2825): `provider = req.provider if r
 | `foundry` | Azure AI Foundry | `FOUNDRY_API_KEY` | gpt-5-mini/gpt-4o, `api-key` header |
 | `gemini` | Google Gemini | `GEMINI_API_KEY` (+`_BACKUP`) | OpenAI route, backup-key failover, image gen |
 | `nova` | Amazon Nova | `NOVA_API_KEY` | nova-2/lite/pro/micro |
-| `inception` | Inception Labs | `INCEPTION_API_KEY` | `mercury-2` (phone default) |
+| `inception` | Inception Labs | `INCEPTION_API_KEY` | `mercury-3` (phone default) |
 | `infron` | **Infron (ONE router)** | **`INFRON_API_KEY`** | qwen/qwen3.8-27b:free — id is **`infron`** not `infrar` |
 | `cohere` | Cohere | `COHERE_API_KEY` | native v2, normalized |
 | `ollama` | Local Ollama | `OLLAMA_API_KEY` | uncensored local; idle-unload watchdog; not viable on phone |

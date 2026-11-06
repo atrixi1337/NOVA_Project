@@ -219,14 +219,14 @@ GMI_MODELS = [
 # ---- provider: Inception Labs (OpenAI-compatible; mercury family of models) ----
 # https://docs.inceptionlabs.ai  Auth is the standard Authorization: Bearer header
 # (handled in nova_headers); it shares the /chat/completions path with the other
-# OpenAI-compatible providers. mercury-2 is their flagship model.
+# OpenAI-compatible providers. mercury-3 is their flagship model.
 INCEPTION_BASE_URL = os.getenv("INCEPTION_BASE_URL", "https://api.inceptionlabs.ai/v1")
 INCEPTION_API_KEY = os.getenv("INCEPTION_API_KEY", "")
-INCEPTION_DEFAULT_MODEL = os.getenv("INCEPTION_MODEL", "mercury-2")
+INCEPTION_DEFAULT_MODEL = os.getenv("INCEPTION_MODEL", "mercury-3")
 # Models offered for the Inception provider in the UI picker.
 INCEPTION_MODELS = [
     m.strip()
-    for m in os.getenv("INCEPTION_MODELS", "mercury-2").split(",")
+    for m in os.getenv("INCEPTION_MODELS", "mercury-3").split(",")
     if m.strip()
 ]
 

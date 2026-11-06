@@ -267,7 +267,7 @@ def test_gateway_key_crud_and_model_list(client):
     assert raw not in json.dumps(lst)  # raw key is never listed back
     models = client.get("/v1/models", headers={"Authorization": f"Bearer {raw}"}).json()
     ids = [m["id"] for m in models["data"]]
-    assert "inception/mercury-2" in ids
+    assert "inception/mercury-3" in ids
     assert "inception/auto" in ids
     assert "gemini/gemini-3.6-flash" in ids
 
@@ -276,12 +276,12 @@ def test_gateway_completion_records_usage_per_key(fake_provider, client):
     raw = _mint_key(client, "opencode")
     r = client.post("/v1/chat/completions",
         headers={"Authorization": f"Bearer {raw}"},
-        json={"model": "inception/mercury-2",
+        json={"model": "inception/mercury-3",
               "messages": [{"role": "user", "content": "hi"}]})
     assert r.status_code == 200
     body = r.json()
     assert body["choices"][0]["message"]["content"] == "fake reply 1"
-    assert body["model"] == "inception/mercury-2"
+    assert body["model"] == "inception/mercury-3"
     # usage attributed to the gateway key's actor
     usage = client.get("/api/usage").json()
     assert usage["by_actor"][0]["actor"] == "gw:opencode"
@@ -610,7 +610,7 @@ def test_gateway_key_scopes_and_quota(fake_provider, client):
     assert client.post("/v1/chat/completions", headers=h, json=b).status_code == 403  # out of scope
 
     ok = client.post("/v1/chat/completions", headers=h, json={
-        "model": "inception/mercury-2", "messages": [{"role": "user", "content": "hi"}]})
+        "model": "inception/mercury-3", "messages": [{"role": "user", "content": "hi"}]})
     assert ok.status_code == 200
     assert ok.json()["choices"][0]["message"]["content"] == "fake reply 1"
 
@@ -620,7 +620,7 @@ def test_gateway_rate_limit_429(fake_provider, client, monkeypatch):
     r = client.post("/api/gateway/keys", json={"name": "rl", "rate_limit_per_min": 1})
     raw = r.json()["key"]
     h = {"Authorization": f"Bearer {raw}"}
-    b = {"model": "inception/mercury-2", "messages": [{"role": "user", "content": "hi"}]}
+    b = {"model": "inception/mercury-3", "messages": [{"role": "user", "content": "hi"}]}
     assert client.post("/v1/chat/completions", headers=h, json=b).status_code == 200
     over = client.post("/v1/chat/completions", headers=h, json=b)
     assert over.status_code == 429

@@ -138,7 +138,7 @@ export default function GatewayTab({ health }) {
         options: { baseURL: `${origin}/v1`, apiKey: 'sk-nova-…' },
         models: {
           'gemini/gemini-3.6-flash': { name: 'Gemini Flash (web-capable)' },
-          'inception/mercury-2': { name: 'Mercury-2' },
+          'inception/mercury-3': { name: 'Mercury-3' },
         },
       },
     },
