@@ -385,7 +385,7 @@ def test_conversation_crud(fake_provider, client):
 # ---------------------------------------------------------------------------
 
 def test_cost_usd_pricing():
-    assert backend._cost_usd("nova", "nova-2-lite-v1", {"prompt_tokens": 100, "completion_tokens": 50}) == 0.018
+    assert backend._cost_usd("nova", "nova-2-lite-v1", {"prompt_tokens": 100, "completion_tokens": 50}) == 0.000018
     assert backend._cost_usd("ollama", "dolphin3.0:8b", {"prompt_tokens": 100, "completion_tokens": 50}) is None
     assert backend._cost_usd("nova", "nova-2-lite-v1", None) is None
 
@@ -757,3 +757,16 @@ def test_spa_shell_routes_uncached(client):
         cc = r.headers.get("Cache-Control", "")
         assert "no-store" in cc, f"{path} is CDN-cacheable -> blank-page risk: {cc!r}"
 
+
+
+def test_reprice_costs_fixes_inflated_rows_idempotently():
+    conn = backend._db()
+    conn.execute("INSERT INTO usage_ledger (conversation_id,role,provider,model,prompt_tokens,completion_tokens,total_tokens,created_at,cost_usd) "
+                 "VALUES ('c','assistant','cohere','command-a-plus-05-2026',1000,1000,2000,1,999.0)")
+    conn.commit(); conn.close()
+    for _ in range(2):
+        backend._reprice_costs()
+        conn = backend._db()
+        v = conn.execute("SELECT cost_usd FROM usage_ledger WHERE conversation_id='c' AND created_at=1").fetchone()[0]
+        conn.close()
+        assert abs(v - 0.00135) < 1e-9

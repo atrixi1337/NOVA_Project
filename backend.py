@@ -2999,8 +2999,8 @@ def db_record_usage(provider: str, model: str, usage: Optional[Dict], actor: str
     conn.close()
 
 
-# --- cost estimates (POC; approximate list prices in USD per 1k tokens) --------
-# key = "provider/model" -> (prompt_per_1k, completion_per_1k). Unknown models
+# --- cost estimates (POC; approximate list prices in USD per 1M tokens) --------
+# key = "provider/model" -> (prompt_per_1M, completion_per_1M). Unknown models
 # yield cost_usd=None (no fabricated price); the UI shows token counts only then.
 MODEL_PRICE: Dict[str, Any] = {
     "nova/nova-2-lite-v1":   (0.06, 0.24),
@@ -3025,11 +3025,31 @@ def _cost_usd(provider: str, model: str, usage: Optional[Dict]) -> Optional[floa
     pp, cp = price
     p = usage.get("prompt_tokens") or 0
     c = usage.get("completion_tokens") or 0
-    return round(pp * p / 1000 + cp * c / 1000, 6)
+    return round(pp * p / 1_000_000 + cp * c / 1_000_000, 8)
 
 
 # Initialize tables on import (idempotent, safe for containers).
 init_db()
+
+
+def _reprice_costs() -> None:
+    """Costs used to be computed per-1k although MODEL_PRICE is per-1M (1000x too high).
+    Recompute stored costs from the token counts. Idempotent: same result on every start."""
+    try:
+        conn = _db()
+        for tbl in ("usage_ledger", "bench_runs"):
+            for key, (pp, cp) in MODEL_PRICE.items():
+                prov, _, model = key.partition("/")
+                conn.execute(
+                    f"UPDATE {tbl} SET cost_usd = ROUND((COALESCE(prompt_tokens,0) * ? + COALESCE(completion_tokens,0) * ?) / 1000000.0, 8) "
+                    "WHERE provider = ? AND model = ?", (pp, cp, prov, model))
+        conn.commit()
+        conn.close()
+    except Exception:  # noqa: BLE001
+        logger.exception("cost re-pricing skipped")
+
+
+_reprice_costs()
 
 
 def db_usage_summary(provider: Optional[str] = None, model: Optional[str] = None,
