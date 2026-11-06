@@ -238,7 +238,7 @@ export default function GatewayTab({ health }) {
           <button
             onClick={create}
             disabled={!name.trim() || busy}
-            className="px-3 py-2 text-[12px] font-semibold rounded-lg bg-accent text-[#1a1000] hover:brightness-90 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
+            className="px-3 py-2 text-[12px] font-semibold rounded-lg bg-accent text-white hover:brightness-90 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
           >
             {busy ? '…' : 'Mint key'}
           </button>

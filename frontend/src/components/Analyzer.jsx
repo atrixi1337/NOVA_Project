@@ -34,7 +34,7 @@ export default function Analyzer({ provider, model, reasoningEffort }) {
               onChange={(e) => setFile(e.target.files?.[0] || null)}
               className="hidden"
             />
-            <span className="inline-block px-3 py-1.5 rounded-lg bg-accent2 text-[#04122b] font-semibold text-[13px]">
+            <span className="inline-block px-3 py-1.5 rounded-lg bg-accent2 text-white font-semibold text-[13px]">
               {file ? file.name : 'Choose a log file…'}
             </span>
           </label>
@@ -51,7 +51,7 @@ export default function Analyzer({ provider, model, reasoningEffort }) {
           <button
             onClick={run}
             disabled={busy || !file}
-            className="px-4 py-1.5 rounded-lg bg-accent text-[#1a1000] font-semibold text-[13px] disabled:opacity-40 hover:brightness-105 transition-all"
+            className="px-4 py-1.5 rounded-lg bg-accent text-white font-semibold text-[13px] disabled:opacity-40 hover:brightness-105 transition-all"
           >
             {busy ? 'Analyzing…' : 'Analyze'}
           </button>

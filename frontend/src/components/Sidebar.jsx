@@ -183,7 +183,7 @@ export default function Sidebar({
       onClick={(e) => { e.stopPropagation(); handleDelete(c.id) }}
       className={`p-1 rounded-md transition-colors ${
         confirmDel === c.id
-          ? 'text-[#1a1000] bg-err font-semibold'
+          ? 'text-white bg-err font-semibold'
           : 'text-muted hover:text-err hover:bg-panel'
       }`}
       title={confirmDel === c.id ? 'Tap again to delete' : 'Delete (tap twice)'}
@@ -202,13 +202,13 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-sidebar overflow-hidden
+      className={`fixed inset-y-0 left-0 z-40 flex flex-col border border-border/60 rounded-r-3xl md:rounded-3xl bg-sidebar/80 backdrop-blur-xl shadow-float md:shadow-soft md:my-2 md:ml-2 overflow-hidden
         -translate-x-full md:static md:translate-x-0 transition-[transform, width] duration-200 ease-in-out
         ${open ? 'translate-x-0' : '-translate-x-full'}
         ${isRail ? 'w-64 min-w-[240px] max-w-80 md:w-16 md:min-w-[56px]' : 'w-64 min-w-[240px] max-w-80'}`}
     >
       {/* top: brand + collapse chevron */}
-      <div className="p-3 border-b border-border">
+      <div className="p-3">
         <div className="flex items-center justify-between px-1 py-1">
           <div className="flex items-center gap-2.5">
             <span aria-hidden="true"
@@ -230,7 +230,7 @@ export default function Sidebar({
         <button
           onClick={() => { onNew(); onClose?.() }}
           disabled={loading?.new}
-          className={`mt-1 w-full flex items-center gap-2 px-3 py-2 text-[13px] font-medium text-[#1a1000] bg-accent rounded-xl hover:brightness-105 disabled:opacity-50 transition-all
+          className={`mt-1 w-full flex items-center gap-2 px-3 py-2 text-[13px] font-medium text-white bg-gradient-to-br from-accent to-accent2 shadow-glow rounded-full hover:brightness-110 disabled:opacity-50 transition-all
             ${isRail ? 'justify-center' : 'justify-start'}`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -307,7 +307,7 @@ export default function Sidebar({
                     onClick={() => { onSelect(c.id); onClose?.() }}
                     title={c.title}
                     className={`w-full h-9 flex items-center justify-center rounded-xl transition-colors
-                      ${active ? 'bg-panel2' : 'hover:bg-panel2/50'}`}
+                      ${active ? 'bg-accent/12 ring-1 ring-accent/25' : 'hover:bg-panel2/60'}`}
                   >
                     <span
                       className={`w-2.5 h-2.5 rounded-full ${active ? 'bg-accent2' : 'bg-muted'}`}
@@ -334,7 +334,7 @@ export default function Sidebar({
                     <li
                       key={c.id}
                       className={`group relative rounded-xl mx-1 ${
-                        active ? 'bg-panel2' : 'hover:bg-panel2/50'
+                        active ? 'bg-accent/12 ring-1 ring-accent/25' : 'hover:bg-panel2/60'
                       } transition-colors`}
                       onMouseEnter={() => setHovered(c.id)}
                       onMouseLeave={() => setHovered(null)}

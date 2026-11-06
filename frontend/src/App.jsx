@@ -922,14 +922,14 @@ export default function App() {
   // Lock gate: render only the passphrase prompt until the API lets us in.
   if (locked) {
     return (
-      <div className="h-[100dvh] bg-bg text-text font-sans overflow-hidden flex items-center justify-center">
+      <div className="h-[100dvh] text-text font-sans overflow-hidden flex items-center justify-center">
         <LockScreen onUnlock={doLogin} busy={authBusy} error={authErr} />
       </div>
     )
   }
 
   return (
-    <div className="flex h-[100dvh] bg-bg text-text font-sans overflow-hidden">
+    <div className="flex h-[100dvh] text-text font-sans overflow-hidden">
       {/* Mobile drawer backdrop (visible only on small screens when sidebar is open) */}
       <div
         className={`fixed inset-0 z-30 bg-black/60 backdrop-blur-sm md:hidden transition-opacity duration-200 ease-in-out ${
@@ -967,7 +967,7 @@ export default function App() {
       />
 
       {/* ── Main ── */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 min-w-0 flex flex-col overflow-hidden bg-panel/50 backdrop-blur-xl md:m-2 md:rounded-3xl md:border md:border-border/60 md:shadow-soft">
         <Header
           onSettings={() => setShowSettings(true)}
           onMenu={() => setSidebarOpen(true)}
@@ -984,12 +984,12 @@ export default function App() {
         />
 
         {/* Tabs (shrink-0: a tall tab body must never squash the bar to zero) */}
-        <div className="shrink-0 relative bg-panel border-b border-border">
+        <div className="shrink-0 relative">
           <div
             ref={tabBarRef}
             role="tablist"
             aria-label="Sections"
-            className="tabstrip flex gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 overflow-x-auto"
+            className="tabstrip flex gap-1 mx-2 sm:mx-4 mb-2 p-1 w-fit max-w-[calc(100%-1rem)] sm:max-w-[calc(100%-2rem)] overflow-x-auto rounded-full bg-panel2/70 border border-border/60"
           >
             {TAB_ITEMS.map(([id, label]) => (
               <button
@@ -1000,7 +1000,7 @@ export default function App() {
                 onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
                 className={`shrink-0 whitespace-nowrap px-3 sm:px-4 py-1.5 text-[12px] sm:text-[13px] font-medium rounded-full transition-all
                   ${tab === id
-                    ? 'text-[#1a1000] bg-accent shadow-soft'
+                    ? 'text-white bg-accent shadow-glow'
                     : 'text-muted hover:text-text hover:bg-panel2'}`}>
                 {label}
               </button>
@@ -1008,7 +1008,7 @@ export default function App() {
           </div>
           {/* fade hint that the strip scrolls (phone widths only) */}
           <div aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-panel to-transparent sm:hidden" />
+            className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-bg/70 to-transparent sm:hidden" />
         </div>
 
         {err && (
@@ -1031,25 +1031,25 @@ export default function App() {
               onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }}
               onDrop={onDropFiles}
             >
-            <div ref={scrollRef} onScroll={onScrollMessages} className="absolute inset-0 overflow-y-auto py-5 space-y-3">
+            <div ref={scrollRef} onScroll={onScrollMessages} className="absolute inset-0 overflow-y-auto py-6 space-y-6">
               {messages.length === 0 && (
                 <div className="h-full flex items-center justify-center text-center px-6">
-                  <div className="space-y-6 max-w-md">
-                    <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto">
-                      <Sparkle className="w-7 h-7 text-accent" />
+                  <div className="space-y-6 max-w-xl">
+                    <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-accent to-accent2 shadow-glow flex items-center justify-center mx-auto">
+                      <Sparkle className="w-8 h-8 text-white" />
                     </div>
-                    <h2 className="text-lg font-medium text-text2">Sallaapam</h2>
-                    <p className="text-sm text-muted max-w-xs mx-auto">
+                    <h2 className="text-4xl font-semibold tracking-tight text-text2">Sallaapam</h2>
+                    <p className="text-[15px] text-muted max-w-sm mx-auto">
                       Ask me anything — analyze logs, write code, research threats, or just chat.
                     </p>
 
                     {/* Suggested starter prompts */}
-                    <div className="flex flex-col gap-2 pt-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
                       {(malayalamMode ? MALAYALAM_QUICK_PROMPTS : securityMode ? SECURITY_QUICK_PROMPTS : QUICK_PROMPTS).map((p) => (
                         <button
                           key={p}
                           onClick={() => setInput(p)}
-                          className="text-left text-[13px] px-3.5 py-2 rounded-xl bg-panel2 border border-border text-muted hover:text-text hover:border-accent2/40 hover:bg-panel transition-colors text-balance"
+                          className="text-left text-[13px] px-4 py-3 rounded-2xl bg-panel2/60 border border-border/60 text-muted hover:text-text hover:border-accent/50 hover:bg-panel2 transition-colors text-balance"
                         >
                           {p}
                         </button>
@@ -1159,7 +1159,7 @@ export default function App() {
             </div>
 
             {/* Input */}
-            <div className="border-t border-border bg-panel p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+            <div className="bg-gradient-to-t from-bg/80 via-bg/30 to-transparent p-3 sm:p-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
               <div
                 className="mx-auto max-w-[820px]"
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
@@ -1227,8 +1227,8 @@ export default function App() {
                     onPaste={onPasteInto}
                     rows={1}
                     placeholder="Message Sallaapam…"
-                    className={`w-full resize-none bg-panel2 text-text border rounded-3xl shadow-soft pl-11 pr-[92px] py-3.5 text-[16px] sm:text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40 ${
-                      dragOver ? 'border-accent/60' : 'border-border'
+                    className={`w-full resize-none bg-panel2/90 backdrop-blur text-text border rounded-3xl shadow-float pl-11 pr-[92px] py-3.5 text-[16px] sm:text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40 ${
+                      dragOver ? 'border-accent/60' : 'border-border/70'
                     }`}
                   />
                   {busy ? (
@@ -1244,7 +1244,7 @@ export default function App() {
                     <button
                       onClick={send}
                       disabled={!input.trim() && attachedImages.length === 0}
-                      className="absolute right-2 bottom-2.5 px-4 py-2 rounded-full bg-accent text-[#1a1000] font-semibold text-[13px] disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed hover:brightness-110 transition-all flex items-center justify-center gap-1.5"
+                      className="absolute right-2 bottom-2.5 px-4 py-2 rounded-full bg-accent text-white shadow-glow font-semibold text-[13px] disabled:shadow-none disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed hover:brightness-110 transition-all flex items-center justify-center gap-1.5"
                     >
                       <SendSolid className="w-4 h-4" />
                       <span>Send</span>

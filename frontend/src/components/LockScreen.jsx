@@ -33,7 +33,7 @@ export default function LockScreen({ onUnlock, busy = false, error = '' }) {
       <button
         type="submit"
         disabled={!pw.trim() || busy}
-        className="w-full py-2.5 rounded-xl bg-accent text-[#1a1000] font-semibold text-[13px] hover:brightness-90 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
+        className="w-full py-2.5 rounded-xl bg-accent text-white font-semibold text-[13px] hover:brightness-90 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
       >
         {busy ? 'Unlocking…' : 'Unlock'}
       </button>

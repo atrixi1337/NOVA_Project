@@ -131,7 +131,7 @@ export default function BenchTab({ health = {}, providers = {} }) {
         <button
           onClick={run}
           disabled={running}
-          className="px-3 py-1.5 text-[13px] font-semibold rounded-lg bg-accent text-[#1a1000] hover:brightness-105 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
+          className="px-3 py-1.5 text-[13px] font-semibold rounded-lg bg-accent text-white hover:brightness-105 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
         >
           {running ? 'Running…' : 'Run benchmark'}
         </button>

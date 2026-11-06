@@ -70,41 +70,40 @@
 }
 
 :root {
-  /* Dark "night at the SOC" palette (RGB form so /<alpha> modifiers still work).
-     Mapped 1:1 to the Tailwind `colors` in tailwind.config.js. */
-  --color-bg: 14 13 12;
-  --color-panel: 22 21 19;
-  --color-panel2: 31 30 27;
-  --color-border: 42 40 36;
-  --color-border2: 58 55 49;
-  --color-text: 222 217 205;
-  --color-text2: 243 239 228;
-  --color-muted: 160 154 140;
-  --color-faint: 62 59 52;
-  --color-sidebar: 18 17 15;
-  --color-accent: 224 178 56;
-  --color-accent2: 196 156 46;
-  --color-user: 22 21 19;
-  --color-err: 150 64 47;
-  --color-ok: 63 208 122;
+  /* "Graphite + violet" — neutral near-black surfaces, one confident indigo/violet accent. */
+  --color-bg: 10 10 13;
+  --color-panel: 18 18 23;
+  --color-panel2: 27 27 34;
+  --color-border: 40 40 50;
+  --color-border2: 58 58 72;
+  --color-text: 226 226 234;
+  --color-text2: 246 246 250;
+  --color-muted: 142 142 160;
+  --color-faint: 50 50 62;
+  --color-sidebar: 15 15 20;
+  --color-accent: 110 108 250;
+  --color-accent2: 167 150 252;
+  --color-user: 27 27 34;
+  --color-err: 244 105 105;
+  --color-ok: 52 211 153;
 }
 /* F2 light theme — applied by toggling `data-theme` (persisted as nova_theme). */
 [data-theme="light"] {
-  --color-bg: 248 245 240;
-  --color-panel: 240 236 227;
-  --color-panel2: 230 225 214;
-  --color-border: 214 208 194;
-  --color-border2: 194 188 176;
-  --color-text: 42 37 31;
-  --color-text2: 26 25 21;
-  --color-muted: 107 102 85;
-  --color-faint: 224 216 200;
-  --color-sidebar: 240 236 227;
-  --color-accent: 184 134 11;
-  --color-accent2: 138 115 32;
-  --color-user: 240 236 227;
-  --color-err: 150 64 47;
-  --color-ok: 63 208 122;
+  --color-bg: 246 247 251;
+  --color-panel: 255 255 255;
+  --color-panel2: 241 242 248;
+  --color-border: 226 228 238;
+  --color-border2: 204 207 222;
+  --color-text: 38 40 54;
+  --color-text2: 18 19 30;
+  --color-muted: 108 112 134;
+  --color-faint: 232 234 243;
+  --color-sidebar: 255 255 255;
+  --color-accent: 88 86 230;
+  --color-accent2: 109 90 224;
+  --color-user: 241 242 248;
+  --color-err: 220 62 62;
+  --color-ok: 16 160 110;
 }
 
 html, body, #root {
@@ -116,7 +115,11 @@ html, body, #root {
 }
 
 body {
-  background: rgb(var(--color-bg));
+  background:
+    radial-gradient(900px 500px at 8% -10%, rgb(var(--color-accent) / 0.16), transparent 60%),
+    radial-gradient(800px 500px at 100% 110%, rgb(var(--color-accent2) / 0.10), transparent 60%),
+    rgb(var(--color-bg));
+  background-attachment: fixed;
   color: rgb(var(--color-text));
 }
 
@@ -146,8 +149,7 @@ button, select, input, textarea {
 button:not(:disabled):active { transform: scale(0.97); }
 input, textarea, select { border-radius: inherit; }
 
-/* amber selection (melancholic touch) */
-::selection { background: rgb(var(--color-accent)); color: rgb(var(--color-bg)); }
+::selection { background: rgb(var(--color-accent) / 0.55); color: #fff; }
 
 /* Keyboard focus: amber ring for keyboard navigation only. */
 :focus-visible {
@@ -170,25 +172,25 @@ input, textarea, select { border-radius: inherit; }
 .md ul { list-style: disc; }
 .md ol { list-style: decimal; }
 .md li { margin: 0.2em 0; }
-.md a { color: #e0b238; text-decoration: underline; }
+.md a { color: rgb(var(--color-accent2)); text-decoration: underline; }
 .md blockquote {
-  border-left: 3px solid #3a3731; border-radius: 2px; margin: 0.5em 0; padding: 0.2em 0.9em; color: #827d70;
+  border-left: 3px solid rgb(var(--color-border2)); border-radius: 2px; margin: 0.5em 0; padding: 0.2em 0.9em; color: rgb(var(--color-muted));
   font-style: italic;
 }
 .md table { border-collapse: collapse; margin: 0.6em 0; width: 100%; font-size: 0.92em; }
-.md th, .md td { border: 1px solid #24221d; padding: 5px 9px; text-align: left; }
-.md th { background: #12100e; }
-.md hr { border: none; border-top: 1px solid #24221d; margin: 0.8em 0; }
+.md th, .md td { border: 1px solid rgb(var(--color-border)); padding: 5px 9px; text-align: left; }
+.md th { background: rgb(var(--color-panel2)); }
+.md hr { border: none; border-top: 1px solid rgb(var(--color-border)); margin: 0.8em 0; }
 
 /* Code blocks — Message.jsx wraps each <pre> in a .codeblock with a header
    bar (language label + always-visible copy button). Code preserves its
    layout and scrolls horizontally instead of wrapping (wrapping destroys
    indentation). Inline code still wraps normally. */
 .codeblock {
-  border: 1px solid #2a2824;
-  border-radius: 14px;
+  border: 1px solid rgb(var(--color-border));
+  border-radius: 16px;
   margin: 0.6em 0;
-  background: #0b0a09;
+  background: #0d0d12;
   overflow: hidden;
 }
 .codeblock-head {
@@ -196,14 +198,14 @@ input, textarea, select { border-radius: inherit; }
   align-items: center;
   justify-content: space-between;
   padding: 3px 6px 3px 12px;
-  border-bottom: 1px solid #24221d;
-  background: #12100e;
+  border-bottom: 1px solid #23232d;
+  background: #15151c;
 }
 .codeblock-lang {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #827d70;
+  color: rgb(var(--color-muted));
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   user-select: none;
 }
@@ -215,7 +217,7 @@ input, textarea, select { border-radius: inherit; }
 }
 
 .md pre {
-  background: #0b0a09;
+  background: #0d0d12;
   padding: 12px 14px;
   overflow-x: auto;
   margin: 0.6em 0;
@@ -227,8 +229,8 @@ input, textarea, select { border-radius: inherit; }
   font-size: 0.88em;
 }
 .md :not(pre) > code {
-  background: #1f1e1b;
-  border: 1px solid #2a2824;
+  background: rgb(var(--color-panel2));
+  border: 1px solid rgb(var(--color-border));
   border-radius: 7px;
   padding: 1px 6px;
 }
@@ -239,9 +241,9 @@ input, textarea, select { border-radius: inherit; }
   font-size: 11px;
   padding: 3px 8px;
   border-radius: 999px;
-  border: 1px solid #2a2824;
-  background: #1f1e1b;
-  color: #9a9484;
+  border: 1px solid rgb(var(--color-border));
+  background: rgb(var(--color-panel2));
+  color: rgb(var(--color-muted));
   cursor: pointer;
   transition: opacity 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   font-family: 'IBM Plex Mono', monospace;
@@ -255,28 +257,28 @@ input, textarea, select { border-radius: inherit; }
 .copy-btn .check-icon { opacity: 0; }
 .copy-btn.copied .copy-icon { opacity: 0; }
 .copy-btn.copied .check-icon { opacity: 1; }
-.copy-btn:hover { color: #d6d0c2; border-color: #c9a227; }
+.copy-btn:hover { color: rgb(var(--color-text)); border-color: rgb(var(--color-accent2)); }
 
 /* highlight.js — warm "night at the SOC" token palette. highlightElement()
    was already tagging tokens with .hljs-* spans, but no theme CSS existed,
    so code blocks rendered monochrome. Scoped to highlighted blocks only. */
-.hljs { color: #d6d0c2; background: transparent; }
-.hljs-comment, .hljs-quote { color: #6f6a5d; font-style: italic; }
+.hljs { color: #dcdce6; background: transparent; }
+.hljs-comment, .hljs-quote { color: #6c7090; font-style: italic; }
 .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-section, .hljs-doctag,
-.hljs-type, .hljs-name, .hljs-strong { color: #e0a458; font-weight: 600; }
-.hljs-string, .hljs-regexp, .hljs-addition { color: #a3be6c; }
+.hljs-type, .hljs-name, .hljs-strong { color: #c3a6ff; font-weight: 600; }
+.hljs-string, .hljs-regexp, .hljs-addition { color: #7ee0ac; }
 .hljs-number, .hljs-symbol, .hljs-bullet, .hljs-attr, .hljs-attribute,
-.hljs-variable, .hljs-template-variable { color: #d08770; }
-.hljs-title, .hljs-title.function_, .hljs-title.class_ { color: #e5c07b; }
-.hljs-built_in, .hljs-builtin-name { color: #d19a66; }
-.hljs-meta, .hljs-meta .hljs-keyword { color: #8a7320; }
-.hljs-tag { color: #98917f; }
-.hljs-tag .hljs-name { color: #e0a458; }
-.hljs-params { color: #b8b2a3; }
-.hljs-property, .hljs-operator, .hljs-punctuation { color: #c9c2b0; }
-.hljs-selector-class, .hljs-selector-id, .hljs-selector-attr, .hljs-selector-pseudo { color: #c98f4e; }
-.hljs-deletion { color: #96402f; }
-.hljs-link { color: #c9a227; text-decoration: underline; }
+.hljs-variable, .hljs-template-variable { color: #ffa982; }
+.hljs-title, .hljs-title.function_, .hljs-title.class_ { color: #7cc7ff; }
+.hljs-built_in, .hljs-builtin-name { color: #f0a8ff; }
+.hljs-meta, .hljs-meta .hljs-keyword { color: #8f93b8; }
+.hljs-tag { color: #9da1c4; }
+.hljs-tag .hljs-name { color: #c3a6ff; }
+.hljs-params { color: #c3c6de; }
+.hljs-property, .hljs-operator, .hljs-punctuation { color: #c3c6de; }
+.hljs-selector-class, .hljs-selector-id, .hljs-selector-attr, .hljs-selector-pseudo { color: #ffb98a; }
+.hljs-deletion { color: #ff7b7b; }
+.hljs-link { color: #9aa0ff; text-decoration: underline; }
 .hljs-emphasis { font-style: italic; }
 
 /* collapsible elements */
@@ -309,7 +311,7 @@ details[open] > summary .summary-chevron { transform: rotate(180deg); }
 /* streaming caret at the end of a token-by-token reply */
 .stream-caret {
   display: inline-block;
-  color: #c9a227;
+  color: rgb(var(--color-accent2));
   animation: pulse 1s ease-in-out infinite;
   margin-left: 2px;
   font-size: 0.9em;

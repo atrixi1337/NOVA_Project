@@ -46,6 +46,7 @@ export default {
       boxShadow: {
         soft: '0 1px 2px rgb(0 0 0 / 0.18), 0 4px 16px -4px rgb(0 0 0 / 0.28)',
         float: '0 8px 30px -8px rgb(0 0 0 / 0.5)',
+        glow: '0 6px 24px -6px rgb(var(--color-accent) / 0.55)',
       },
       keyframes: {
         blink: { '0%, 100%': { opacity: '1' }, '50%': { opacity: '0' } },

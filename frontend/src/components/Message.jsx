@@ -142,14 +142,12 @@ export default function Message({ msg, streaming = false, onEdit, onRegenerate }
       <div
         className={`max-w-[820px] w-full flex gap-3 items-start ${isUser ? 'flex-row-reverse' : ''}`}
       >
-        <div
-          className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
-            isUser ? 'bg-accent text-[#1a1000]' : 'bg-accent2 text-[#04122b]'
-          }`}
-        >
-          {isUser ? 'You' : 'AI'}
-        </div>
-        <div className="relative min-w-0">
+        {!isUser && (
+          <div className="shrink-0 mt-0.5 w-8 h-8 rounded-full bg-gradient-to-br from-accent to-accent2 shadow-glow flex items-center justify-center text-[13px] text-white">
+            ✦
+          </div>
+        )}
+        <div className={`relative min-w-0 ${isUser ? 'max-w-[88%]' : 'flex-1'}`}>
           {/* hover actions: copy always; edit on user msgs; retry on assistant */}
           <div
             className={`absolute -top-3 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity ${
@@ -186,8 +184,8 @@ export default function Message({ msg, streaming = false, onEdit, onRegenerate }
             </button>
           </div>
           <div
-            className={`rounded-2xl px-4 py-3 text-[15px] leading-relaxed ${
-              isUser ? 'bg-accent/12 border border-accent/20 rounded-tr-md' : 'bg-panel2 border border-border/70 shadow-soft rounded-tl-md'
+            className={`text-[15px] leading-7 ${
+              isUser ? 'bg-accent/15 border border-accent/25 rounded-3xl rounded-br-lg px-4 py-2.5' : 'px-1 py-1'
             }`}
           >
             {isUser ? (

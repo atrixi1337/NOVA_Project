@@ -434,7 +434,7 @@ export default function SettingsModal({
                   } catch (e) { setPersonaErr(e.message) }
                 }}
                 disabled={!newPersonaName.trim() || !newPersonaPrompt.trim()}
-                className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-accent text-[#1a1000] font-semibold hover:brightness-90 disabled:opacity-40 transition-all"
+                className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-accent text-white font-semibold hover:brightness-90 disabled:opacity-40 transition-all"
               >Create persona</button>
             </div>
           </div>

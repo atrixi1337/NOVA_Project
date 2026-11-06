@@ -108,7 +108,7 @@ export default function Arena({ providers = {}, health, malayalamMode = false, s
                   disabled={running}
                   title={cfg ? p.label : `${p.label} — no key on server`}
                   className={`flex items-center gap-1.5 px-2 py-1 rounded-full border text-[11px] transition-colors disabled:opacity-60
-                    ${on ? 'bg-accent text-[#1a1000] border-accent font-medium' : cfg ? 'bg-panel2 text-muted border-border hover:text-text' : 'bg-panel2 text-muted/40 border-border'}`}
+                    ${on ? 'bg-accent text-white border-accent font-medium' : cfg ? 'bg-panel2 text-muted border-border hover:text-text' : 'bg-panel2 text-muted/40 border-border'}`}
                 >
                   <span
                     className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -130,7 +130,7 @@ export default function Arena({ providers = {}, health, malayalamMode = false, s
               <button
                 onClick={run}
                 disabled={!prompt.trim() || selected.length === 0}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold rounded-lg bg-accent text-[#1a1000] hover:brightness-105 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold rounded-lg bg-accent text-white hover:brightness-105 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
               >
                 <SendSolid className="w-3.5 h-3.5" /> Run {selected.length > 1 ? selected.length : ''}
               </button>

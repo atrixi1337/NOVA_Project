@@ -206,7 +206,7 @@ export default function ScheduleTab({ providers = {}, onOpenConversation }) {
           <button
             onClick={create}
             disabled={!name.trim() || !prompt.trim()}
-            className="px-3 py-1.5 text-[12px] font-semibold rounded-lg bg-accent text-[#1a1000] hover:brightness-105 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
+            className="px-3 py-1.5 text-[12px] font-semibold rounded-lg bg-accent text-white hover:brightness-105 disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed transition-all"
           >
             Add
           </button>

@@ -122,7 +122,7 @@ function HealthDot({ health, host }) {
 export default function Header({ onSettings, onMenu, providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health, host, theme = 'dark', onTheme, hideBrand = false }) {
   const hasProviders = onSwitchProvider && Object.keys(providers).length > 0
   return (
-    <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 bg-panel/90 backdrop-blur border-b border-border/70">
+    <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 bg-transparent">
       <div className="flex items-center gap-2 min-w-0">
         {onMenu && (
           <button
