@@ -76,7 +76,7 @@ export function Markdown({ content, streaming = false }) {
   return (
     <div className={streaming ? 'md md-streaming' : 'md'}>
       <div ref={ref} dangerouslySetInnerHTML={{ __html: html }} />
-      {streaming && <span className="stream-caret" aria-hidden="true">▍</span>}
+      {streaming && <span className="inline-block w-2 h-2 ml-1 align-middle rounded-full bg-accent2 animate-pulse" aria-hidden="true" />}
     </div>
   )
 }

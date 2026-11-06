@@ -1156,7 +1156,7 @@ export default function App() {
                     onPaste={onPasteInto}
                     rows={1}
                     placeholder="Message Sallaapam…"
-                    className="block w-full resize-none bg-transparent text-text px-5 pt-4 pb-1 text-[16px] sm:text-[15px] outline-none placeholder:text-muted/60 min-h-[52px] max-h-48"
+                    className="block w-full resize-none bg-transparent text-text px-5 pt-4 pb-1 text-[16px] sm:text-[15px] outline-none focus:outline-none focus-visible:outline-none placeholder:text-muted/60 min-h-[52px] max-h-48"
                   />
                   <div className="flex items-center gap-1.5 px-3 pb-3 pt-1">
                     <button
