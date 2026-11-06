@@ -152,7 +152,7 @@ export default function GatewayTab({ health }) {
           Inference Gateway
         </h2>
         <button onClick={load} disabled={busy}
-          className="px-2.5 py-1 text-[12px] rounded-lg border border-border bg-black hover:border-accent2 text-muted hover:text-text disabled:opacity-40 transition-all">
+          className="px-2.5 py-1 text-[12px] rounded-lg border border-border bg-bg hover:border-accent2 text-muted hover:text-text disabled:opacity-40 transition-all">
           Refresh
         </button>
       </header>
@@ -163,21 +163,21 @@ export default function GatewayTab({ health }) {
       <div className="rounded-xl border border-border bg-panel2 p-4 space-y-3">
         <div className="font-semibold text-text text-[14px]">Point any OpenAI-compatible agent here</div>
         <div className="text-[12px] text-muted">
-          Base URL <code className="px-1 py-0.5 rounded bg-black text-accent">{origin}/v1</code> ·
-          auth <code className="px-1 py-0.5 rounded bg-black text-text2">Authorization: Bearer sk-nova-…</code> ·
-          models as <code className="px-1 py-0.5 rounded bg-black text-text2">provider/model</code>
+          Base URL <code className="px-1 py-0.5 rounded bg-bg text-accent">{origin}/v1</code> ·
+          auth <code className="px-1 py-0.5 rounded bg-bg text-text2">Authorization: Bearer sk-nova-…</code> ·
+          models as <code className="px-1 py-0.5 rounded bg-bg text-text2">provider/model</code>
         </div>
         <div>
           <div className="flex items-center justify-between text-[11px] text-muted mb-1">
             <span>curl</span><CopyBtn text={curlSnippet} />
           </div>
-          <pre className="bg-black border border-border rounded-lg p-2.5 text-[11px] overflow-x-auto whitespace-pre">{curlSnippet}</pre>
+          <pre className="bg-bg border border-border rounded-xl p-2.5 text-[11px] overflow-x-auto whitespace-pre">{curlSnippet}</pre>
         </div>
         <div>
           <div className="flex items-center justify-between text-[11px] text-muted mb-1">
             <span>OpenCode config (~/.config/opencode/opencode.json)</span><CopyBtn text={opencodeSnippet} />
           </div>
-          <pre className="bg-black border border-border rounded-lg p-2.5 text-[11px] overflow-x-auto whitespace-pre">{opencodeSnippet}</pre>
+          <pre className="bg-bg border border-border rounded-xl p-2.5 text-[11px] overflow-x-auto whitespace-pre">{opencodeSnippet}</pre>
         </div>
         <p className="text-[11px] text-muted/60">
           Every call is metered to its key below — see the Usage tab for the full ledger.
@@ -192,7 +192,7 @@ export default function GatewayTab({ health }) {
           <CopyBtn text={configuredList} label="copy list" />
         </div>
         <div className="text-[11px] text-muted/60">
-          Use as <code className="px-0.5 rounded bg-black text-text2">"model": "provider/model"</code> in
+          Use as <code className="px-0.5 rounded bg-bg text-text2">"model": "provider/model"</code> in
           requests. Greyed-out providers have no server key and will refuse inference.
           "Copy list" copies only the working ones.
         </div>
@@ -211,7 +211,7 @@ export default function GatewayTab({ health }) {
               {['auto', ...g.models].map((m) => (
                 <code
                   key={m}
-                  className={`px-1.5 py-0.5 rounded bg-black border text-[10.5px] ${
+                  className={`px-1.5 py-0.5 rounded bg-bg border text-[10.5px] ${
                     g.configured ? 'border-border text-text2' : 'border-border/50 text-muted/50 line-through'
                   }`}
                 >
@@ -233,7 +233,7 @@ export default function GatewayTab({ health }) {
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') create() }}
             placeholder="key name — e.g. opencode-laptop"
-            className="flex-1 bg-black text-text text-[13px] px-3 py-2 rounded-lg border border-border outline-none focus:border-accent2 transition-colors placeholder:text-muted/40"
+            className="flex-1 bg-bg text-text text-[13px] px-3 py-2 rounded-lg border border-border outline-none focus:border-accent2 transition-colors placeholder:text-muted/40"
           />
           <button
             onClick={create}
@@ -250,7 +250,7 @@ export default function GatewayTab({ health }) {
               value={scope}
               onChange={(e) => setScope(e.target.value)}
               placeholder='blank = all models'
-              className="flex-1 bg-black text-text px-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2 placeholder:text-muted/40"
+              className="flex-1 bg-bg text-text px-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2 placeholder:text-muted/40"
             />
           </div>
           <div className="flex items-center gap-2 text-[12px]">
@@ -260,7 +260,7 @@ export default function GatewayTab({ health }) {
               onChange={(e) => setQuotaTokens(e.target.value)}
               type="number" min="1"
               placeholder="blank = no daily cap"
-              className="flex-1 bg-black text-text px-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2"
+              className="flex-1 bg-bg text-text px-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2"
             />
           </div>
           <div className="flex items-center gap-2 text-[12px]">
@@ -270,7 +270,7 @@ export default function GatewayTab({ health }) {
               onChange={(e) => setRateLimit(e.target.value)}
               type="number" min="1"
               placeholder="blank = server default"
-              className="flex-1 bg-black text-text px-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2"
+              className="flex-1 bg-bg text-text px-2 py-1.5 rounded-lg border border-border outline-none focus:border-accent2"
             />
           </div>
         </div>
@@ -280,7 +280,7 @@ export default function GatewayTab({ health }) {
               Key for <b>{newKey.name}</b> — copy it NOW, it is shown only this once (only its hash is stored):
             </div>
             <div className="flex items-center gap-2">
-              <code className="flex-1 bg-black border border-border rounded-lg px-2.5 py-2 text-[12px] text-text2 overflow-x-auto whitespace-nowrap">{newKey.key}</code>
+              <code className="flex-1 bg-bg border border-border rounded-xl px-2.5 py-2 text-[12px] text-text2 overflow-x-auto whitespace-nowrap">{newKey.key}</code>
               <CopyBtn text={newKey.key} label="copy key" />
             </div>
             <button onClick={() => setNewKey(null)} className="text-[11px] text-muted hover:text-text transition-colors">
@@ -347,7 +347,7 @@ export default function GatewayTab({ health }) {
         )}
         <div className="text-[11px] text-muted/60">
           Revoked keys stop working immediately but keep their usage history.
-          Gateway calls are recorded per key in the usage ledger (actor <code className="px-0.5 rounded bg-black">gw:&lt;name&gt;</code>).
+          Gateway calls are recorded per key in the usage ledger (actor <code className="px-0.5 rounded bg-bg">gw:&lt;name&gt;</code>).
         </div>
       </div>
       ) : (

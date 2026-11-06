@@ -124,7 +124,7 @@ export default function SettingsModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
          onClick={onClose}>
       <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Settings"
-           className="w-full max-w-lg bg-panel2 border border-border rounded-2xl shadow-2xl m-4 max-h-[85vh] overflow-y-auto"
+           className="w-full max-w-lg bg-panel2 border border-border/70 rounded-3xl shadow-float m-4 max-h-[85vh] overflow-y-auto"
            onClick={(e) => e.stopPropagation()}>
 
         {/* Header */}
@@ -148,7 +148,7 @@ export default function SettingsModal({
                 value={provider}
                 onChange={(e) => setProvider(e.target.value)}
                 disabled={malayalamMode}
-                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors disabled:opacity-60"
+                className="w-full text-[13px] px-3 py-2 bg-bg border border-border rounded-xl text-text outline-none focus:border-accent2 transition-colors disabled:opacity-60"
               >
                 {provOpts.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
@@ -164,7 +164,7 @@ export default function SettingsModal({
                 value={model || 'auto'}
                 onChange={(e) => setModel(e.target.value)}
                 disabled={malayalamMode}
-                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors disabled:opacity-60"
+                className="w-full text-[13px] px-3 py-2 bg-bg border border-border rounded-xl text-text outline-none focus:border-accent2 transition-colors disabled:opacity-60"
               >
                 {modelOpts.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
@@ -204,7 +204,7 @@ export default function SettingsModal({
                 <select
                   value={reasoningEffort || ''}
                   onChange={(e) => setReasoning(e.target.value)}
-                  className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors"
+                  className="w-full text-[13px] px-3 py-2 bg-bg border border-border rounded-xl text-text outline-none focus:border-accent2 transition-colors"
                 >
                   <option value="">Off</option>
                   <option value="low">Low</option>
@@ -222,7 +222,7 @@ export default function SettingsModal({
                   value={toolsPreset}
                   onChange={(e) => setToolsPreset(e.target.value)}
                   disabled={securityMode}
-                  className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors disabled:opacity-60"
+                  className="w-full text-[13px] px-3 py-2 bg-bg border border-border rounded-xl text-text outline-none focus:border-accent2 transition-colors disabled:opacity-60"
                 >
                   <option value="core">Core — time, calculate, read_file</option>
                   <option value="research">Research — core + web search & fetch</option>
@@ -283,7 +283,7 @@ export default function SettingsModal({
                 onChange={(e) => setImgPrompt(e.target.value)}
                 rows={2}
                 placeholder="A photorealistic sunset over a neon city, 8k…"
-                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors placeholder:text-muted/40 resize-none"
+                className="w-full text-[13px] px-3 py-2 bg-bg border border-border rounded-xl text-text outline-none focus:border-accent2 transition-colors placeholder:text-muted/40 resize-none"
               />
             </div>
             <div className="flex items-center gap-2.5">
@@ -301,7 +301,7 @@ export default function SettingsModal({
                   setImgGenBusy(false)
                 }}
                 disabled={!imgPrompt.trim() || imgGenBusy}
-                className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-black hover:border-accent2 disabled:opacity-40 transition-all"
+                className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-bg hover:border-accent2 disabled:opacity-40 transition-all"
               >
                 {imgGenBusy ? 'Generating…' : 'Generate'}
               </button>
@@ -414,14 +414,14 @@ export default function SettingsModal({
                 value={newPersonaName}
                 onChange={(e) => setNewPersonaName(e.target.value)}
                 placeholder="Persona name"
-                className="w-full text-[13px] px-3 py-1.5 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 placeholder:text-muted/40"
+                className="w-full text-[13px] px-3 py-1.5 bg-bg border border-border rounded-xl text-text outline-none focus:border-accent2 placeholder:text-muted/40"
               />
               <textarea
                 value={newPersonaPrompt}
                 onChange={(e) => setNewPersonaPrompt(e.target.value)}
                 placeholder="System prompt…"
                 rows={3}
-                className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 placeholder:text-muted/40 resize-none"
+                className="w-full text-[13px] px-3 py-2 bg-bg border border-border rounded-xl text-text outline-none focus:border-accent2 placeholder:text-muted/40 resize-none"
               />
               <button
                 onClick={async () => {
@@ -450,12 +450,12 @@ export default function SettingsModal({
                 <button
                   onClick={ollamaLoad}
                   disabled={ollamaBusy || ollama.loaded}
-                  className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-black hover:border-accent2 disabled:opacity-40 transition-all"
+                  className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-bg hover:border-accent2 disabled:opacity-40 transition-all"
                 >{ollamaBusy ? '...' : 'Load'}</button>
                 <button
                   onClick={ollamaUnload}
                   disabled={ollamaBusy || !ollama.loaded}
-                  className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-black hover:border-err disabled:opacity-40 transition-all"
+                  className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-bg hover:border-err disabled:opacity-40 transition-all"
                 >Unload</button>
               </div>
             </div>
@@ -465,7 +465,7 @@ export default function SettingsModal({
           <div className="space-y-3">
             <h4 className="text-[12px] font-semibold text-muted uppercase tracking-wider">API Keys (optional override)</h4>
             <p className="text-[11px] text-muted/60">
-              Keys entered here are saved in your browser (<code className="text-[10px] bg-black px-1 rounded">localStorage</code>)
+              Keys entered here are saved in your browser (<code className="text-[10px] bg-bg px-1 rounded">localStorage</code>)
               and sent with each request. Leave blank to use server-configured keys.
             </p>
             <div className="space-y-3 max-h-64 overflow-y-auto">
@@ -486,7 +486,7 @@ export default function SettingsModal({
                         value={uiKey || ''}
                         onChange={(e) => handleKey(pid, e.target.value)}
                         placeholder={meta.placeholder}
-                        className="w-full text-[13px] px-3 py-2 bg-black border border-border rounded-lg text-text outline-none focus:border-accent2 transition-colors placeholder:text-muted/40"
+                        className="w-full text-[13px] px-3 py-2 bg-bg border border-border rounded-xl text-text outline-none focus:border-accent2 transition-colors placeholder:text-muted/40"
                       />
                     )}
                     {meta.note && <span className="text-[11px] text-muted">{meta.note}</span>}

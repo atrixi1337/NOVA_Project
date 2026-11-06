@@ -3,6 +3,7 @@ import { api } from './api.js'
 import { getUIKey } from './components/SettingsModal.jsx'
 import Sidebar from './components/Sidebar.jsx'
 import Header from './components/Header.jsx'
+import NavRail from './components/NavRail.jsx'
 import Message from './components/Message.jsx'
 import AgentTrace from './components/AgentTrace.jsx'
 import ReasoningBox from './components/ReasoningBox.jsx'
@@ -928,8 +929,14 @@ export default function App() {
     )
   }
 
+  const selectTab = (id) => { setTab(id); setErr(''); setLastMeta(null) }
+  const sectionTitle = tab === 'chat'
+    ? ((conversations.find((c) => c.id === currentId) || {}).title || 'New chat')
+    : ((TAB_ITEMS.find(([id]) => id === tab) || [])[1] || '')
+
   return (
-    <div className="flex h-[100dvh] text-text font-sans overflow-hidden">
+    <div className="flex flex-col md:flex-row h-[100dvh] text-text font-sans overflow-hidden">
+      <NavRail variant="rail" items={TAB_ITEMS} tab={tab} onSelect={selectTab} onSettings={() => setShowSettings(true)} theme={theme} onTheme={toggleTheme} />
       {/* Mobile drawer backdrop (visible only on small screens when sidebar is open) */}
       <div
         className={`fixed inset-0 z-30 bg-black/60 backdrop-blur-sm md:hidden transition-opacity duration-200 ease-in-out ${
@@ -938,39 +945,42 @@ export default function App() {
         onClick={() => setSidebarOpen(false)}
       />
       {/* Sidebar: inline on desktop, off-canvas drawer on mobile */}
-      <Sidebar
-        conversations={conversations}
-        currentId={currentId}
-        onNew={startNewChat}
-        onSelect={openConversation}
-        onRename={renameConversation}
-        onDelete={deleteConversation}
-        onTogglePin={togglePin}
-        onToggleArchive={toggleArchive}
-        onExport={exportConversation}
-        onFork={forkConversation}
-        onDiff={diffWith}
-        onSettings={() => setShowSettings(true)}
-        loading={{ new: busy }}
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        collapsed={sidebarCollapsed}
-        onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
-        admin={health?.is_admin}
-        historyRestricted={historyRestricted}
-        search={searchHits}
-        searchDenied={searchDenied}
-        searchLoading={searchLoading}
-        onSearchQuery={setSearchQuery}
-        onExportArchive={() => exportArchive(false)}
-        onImportArchive={importArchive}
-      />
+      {tab === 'chat' && (
+        <Sidebar
+          conversations={conversations}
+          currentId={currentId}
+          onNew={startNewChat}
+          onSelect={openConversation}
+          onRename={renameConversation}
+          onDelete={deleteConversation}
+          onTogglePin={togglePin}
+          onToggleArchive={toggleArchive}
+          onExport={exportConversation}
+          onFork={forkConversation}
+          onDiff={diffWith}
+          onSettings={() => setShowSettings(true)}
+          loading={{ new: busy }}
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+          admin={health?.is_admin}
+          historyRestricted={historyRestricted}
+          search={searchHits}
+          searchDenied={searchDenied}
+          searchLoading={searchLoading}
+          onSearchQuery={setSearchQuery}
+          onExportArchive={() => exportArchive(false)}
+          onImportArchive={importArchive}
+        />
+      )}
 
       {/* ── Main ── */}
-      <main className="flex-1 min-w-0 flex flex-col overflow-hidden bg-panel/50 backdrop-blur-xl md:m-2 md:rounded-3xl md:border md:border-border/60 md:shadow-soft">
+      <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden bg-panel/50 backdrop-blur-xl md:my-2 md:mr-2 md:ml-2 md:rounded-3xl md:border md:border-border/60 md:shadow-soft">
         <Header
           onSettings={() => setShowSettings(true)}
-          onMenu={() => setSidebarOpen(true)}
+          onMenu={tab === 'chat' ? () => setSidebarOpen(true) : undefined}
+          title={sectionTitle}
           providerLabel={providerLabel}
           model={displayModel}
           providers={providers}
@@ -978,38 +988,7 @@ export default function App() {
           onSwitchProvider={switchProvider}
           health={health}
           host={host}
-          theme={theme}
-          onTheme={toggleTheme}
-          hideBrand={!sidebarCollapsed}
         />
-
-        {/* Tabs (shrink-0: a tall tab body must never squash the bar to zero) */}
-        <div className="shrink-0 relative">
-          <div
-            ref={tabBarRef}
-            role="tablist"
-            aria-label="Sections"
-            className="tabstrip flex gap-1 mx-2 sm:mx-4 mb-2 p-1 w-fit max-w-[calc(100%-1rem)] sm:max-w-[calc(100%-2rem)] overflow-x-auto rounded-full bg-panel2/70 border border-border/60"
-          >
-            {TAB_ITEMS.map(([id, label]) => (
-              <button
-                key={id}
-                data-tab={id}
-                role="tab"
-                aria-selected={tab === id}
-                onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
-                className={`shrink-0 whitespace-nowrap px-3 sm:px-4 py-1.5 text-[12px] sm:text-[13px] font-medium rounded-full transition-all
-                  ${tab === id
-                    ? 'text-white bg-accent shadow-glow'
-                    : 'text-muted hover:text-text hover:bg-panel2'}`}>
-                {label}
-              </button>
-            ))}
-          </div>
-          {/* fade hint that the strip scrolls (phone widths only) */}
-          <div aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-bg/70 to-transparent sm:hidden" />
-        </div>
 
         {err && (
           <div className="px-4 py-2 text-[13px] text-err bg-err/10 border-b border-err/30 flex items-center gap-2">
@@ -1033,7 +1012,7 @@ export default function App() {
             >
             <div ref={scrollRef} onScroll={onScrollMessages} className="absolute inset-0 overflow-y-auto py-6 space-y-6">
               {messages.length === 0 && (
-                <div className="h-full flex items-center justify-center text-center px-6">
+                <div className="h-full flex items-center md:items-end justify-center text-center px-6 pb-2">
                   <div className="space-y-6 max-w-xl">
                     <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-accent to-accent2 shadow-glow flex items-center justify-center mx-auto">
                       <Sparkle className="w-8 h-8 text-white" />
@@ -1056,14 +1035,6 @@ export default function App() {
                       ))}
                     </div>
 
-                    <div className="flex flex-wrap gap-1.5 justify-center text-[11px] text-muted pt-1">
-                      <span className="px-2.5 py-1 bg-panel2 rounded-full">Agent mode</span>
-                      <span className="px-2.5 py-1 bg-panel2 rounded-full">{Object.keys(providers).length} providers</span>
-                      <span className="px-2.5 py-1 bg-panel2 rounded-full">History saved</span>
-                      {securityMode && !malayalamMode && (
-                        <span className="px-2.5 py-1 bg-accent2/15 text-accent2 rounded-full">NovaSec</span>
-                      )}
-                    </div>
                   </div>
                 </div>
               )}
@@ -1159,66 +1130,24 @@ export default function App() {
             </div>
 
             {/* Input */}
-            <div className="bg-gradient-to-t from-bg/80 via-bg/30 to-transparent p-3 sm:p-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+            <div className="p-3 sm:p-4 pb-3 sm:pb-5">
               <div
-                className="mx-auto max-w-[820px]"
+                className="mx-auto max-w-[760px]"
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
                 onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }}
                 onDrop={onDropFiles}
               >
-                {/* quick mode toggles — one tap to NovaSec / Malayalam without
-                    digging through Settings */}
-                <div className="flex items-center gap-1.5 mb-2">
-                  <button
-                    onClick={() => setSecurityMode((s) => !s)}
-                    aria-pressed={securityMode}
-                    title="Security Mode (NovaSec)"
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
-                      securityMode ? 'bg-accent2/15 text-accent2 border-accent2/40' : 'bg-panel2 text-muted border-border hover:text-text'
-                    }`}
-                  >
-                    <Shield className="w-3 h-3" /> NovaSec
-                  </button>
-                  <button
-                    onClick={() => setMalayalamMode((m) => !m)}
-                    aria-pressed={malayalamMode}
-                    title="Malayalam mode (routes via Gemini)"
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
-                      malayalamMode ? 'bg-accent2/15 text-accent2 border-accent2/40' : 'bg-panel2 text-muted border-border hover:text-text'
-                    }`}
-                  >
-                    <span className="text-[9px] font-semibold tracking-wider">ML</span> Malayalam
-                  </button>
-                  <button
-                    onClick={() => setWebSearch((w) => !w)}
-                    aria-pressed={webSearch}
-                    title="Let the model search the web (needs a function-calling model; others just answer without it)"
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
-                      webSearch ? 'bg-accent2/15 text-accent2 border-accent2/40' : 'bg-panel2 text-muted border-border hover:text-text'
-                    }`}
-                  >
-                    <Globe className="w-3 h-3" /> Web
-                  </button>
-                  {malayalamMode && <span className="text-[10px] text-muted/70">→ gemini</span>}
-                </div>
-                <div className="relative">
-                  <input
-                    type="file"
-                    multiple
-                    accept="image/*,.txt,.pdf,.csv,.json,.log,.md,.text"
-                    ref={fileInputRef}
-                    onChange={onAttachAll}
-                    className="hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={busy}
-                    className="absolute left-2.5 bottom-3 p-1.5 rounded-full text-muted hover:text-text hover:bg-panel2 transition-colors z-10"
-                    title="Attach image or document"
-                  >
-                    <AttachmentPaperclip className="w-5 h-5" />
-                  </button>
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*,.txt,.pdf,.csv,.json,.log,.md,.text"
+                  ref={fileInputRef}
+                  onChange={onAttachAll}
+                  className="hidden"
+                />
+                <div className={`rounded-[28px] border bg-panel2/90 backdrop-blur shadow-float transition-colors focus-within:border-accent/60 focus-within:ring-4 focus-within:ring-accent/10 ${
+                  dragOver ? 'border-accent/60' : 'border-border/70'
+                }`}>
                   <textarea
                     ref={textareaRef}
                     value={input}
@@ -1227,29 +1156,73 @@ export default function App() {
                     onPaste={onPasteInto}
                     rows={1}
                     placeholder="Message Sallaapam…"
-                    className={`w-full resize-none bg-panel2/90 backdrop-blur text-text border rounded-3xl shadow-float pl-11 pr-[92px] py-3.5 text-[16px] sm:text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40 ${
-                      dragOver ? 'border-accent/60' : 'border-border/70'
-                    }`}
+                    className="block w-full resize-none bg-transparent text-text px-5 pt-4 pb-1 text-[16px] sm:text-[15px] outline-none placeholder:text-muted/60 min-h-[52px] max-h-48"
                   />
-                  {busy ? (
+                  <div className="flex items-center gap-1.5 px-3 pb-3 pt-1">
                     <button
-                      onClick={stopGenerating}
-                      title="Stop generating"
-                      className="absolute right-2 bottom-2.5 px-4 py-2 rounded-full bg-err text-white font-semibold text-[13px] hover:brightness-110 transition-all flex items-center justify-center gap-1.5"
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={busy}
+                      className="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-muted hover:text-text hover:bg-bg/40 transition-colors"
+                      title="Attach image or document"
+                      aria-label="Attach image or document"
                     >
-                      <span className="text-[10px] leading-none">■</span>
-                      <span>Stop</span>
+                      <AttachmentPaperclip className="w-5 h-5" />
                     </button>
-                  ) : (
-                    <button
-                      onClick={send}
-                      disabled={!input.trim() && attachedImages.length === 0}
-                      className="absolute right-2 bottom-2.5 px-4 py-2 rounded-full bg-accent text-white shadow-glow font-semibold text-[13px] disabled:shadow-none disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed hover:brightness-110 transition-all flex items-center justify-center gap-1.5"
-                    >
-                      <SendSolid className="w-4 h-4" />
-                      <span>Send</span>
-                    </button>
-                  )}
+                    <div className="flex items-center gap-1.5 overflow-x-auto tabstrip min-w-0">
+                      <button
+                        onClick={() => setSecurityMode((s) => !s)}
+                        aria-pressed={securityMode}
+                        title="Security Mode (NovaSec)"
+                        className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11.5px] transition-colors ${
+                          securityMode ? 'bg-accent/20 text-accent2' : 'text-muted hover:text-text hover:bg-bg/40'
+                        }`}
+                      >
+                        <Shield className="w-3.5 h-3.5" /> NovaSec
+                      </button>
+                      <button
+                        onClick={() => setMalayalamMode((m) => !m)}
+                        aria-pressed={malayalamMode}
+                        title="Malayalam mode (routes via Gemini)"
+                        className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11.5px] transition-colors ${
+                          malayalamMode ? 'bg-accent/20 text-accent2' : 'text-muted hover:text-text hover:bg-bg/40'
+                        }`}
+                      >
+                        <span className="text-[9px] font-semibold tracking-wider">ML</span> Malayalam
+                      </button>
+                      <button
+                        onClick={() => setWebSearch((w) => !w)}
+                        aria-pressed={webSearch}
+                        title="Let the model search the web (needs a function-calling model; others just answer without it)"
+                        className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11.5px] transition-colors ${
+                          webSearch ? 'bg-accent/20 text-accent2' : 'text-muted hover:text-text hover:bg-bg/40'
+                        }`}
+                      >
+                        <Globe className="w-3.5 h-3.5" /> Web
+                      </button>
+                    </div>
+                    <div className="flex-1" />
+                    {busy ? (
+                      <button
+                        onClick={stopGenerating}
+                        title="Stop generating"
+                        aria-label="Stop generating"
+                        className="w-10 h-10 shrink-0 rounded-full bg-err text-white flex items-center justify-center hover:brightness-110 transition-all"
+                      >
+                        <span className="w-3 h-3 rounded-[3px] bg-white" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={send}
+                        disabled={!input.trim() && attachedImages.length === 0}
+                        title="Send"
+                        aria-label="Send"
+                        className="w-10 h-10 shrink-0 rounded-full bg-accent text-white shadow-glow flex items-center justify-center disabled:bg-border disabled:text-muted disabled:shadow-none disabled:cursor-not-allowed hover:brightness-110 transition-all"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5m0 0l-6 6m6-6l6 6" /></svg>
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {attachedImages.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-2">
@@ -1296,6 +1269,7 @@ export default function App() {
                 )}
               </div>
             </div>
+            {messages.length === 0 && <div className="hidden md:block h-[14vh] shrink min-h-0" />}
           </>
         ) : tab === 'arena' ? (
           <Arena
@@ -1424,6 +1398,7 @@ export default function App() {
         onSelectPersona={setSelectedPersona}
         onRefreshPersonas={() => api.personas().then((r) => setCustomPersonas(r.personas || [])).catch(() => {})}
       />
+      <NavRail variant="bottom" items={TAB_ITEMS} tab={tab} onSelect={selectTab} />
     </div>
   )
 }

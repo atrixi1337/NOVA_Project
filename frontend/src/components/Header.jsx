@@ -115,75 +115,44 @@ function HealthDot({ health, host }) {
   )
 }
 
-// melancholic "SOC night shift" header — warm raised bar, amber wordmark with a
-// blinking indicator, a backend health dot, a provider quick-switch dropdown,
-// and a small-caps model read-out. Desktop also gets a live clock; on phones
-// the bar stays lean (no logo/clock) so nothing overlaps or clips.
-export default function Header({ onSettings, onMenu, providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health, host, theme = 'dark', onTheme, hideBrand = false }) {
+// Minimal top bar: section/conversation title on the left, a single model pill,
+// health dot and quick actions on the right. Navigation lives in NavRail.
+export default function Header({ onSettings, onMenu, title = '', providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health, host }) {
   const hasProviders = onSwitchProvider && Object.keys(providers).length > 0
+  const current = (activeProvider && providers[activeProvider]?.label) || providerLabel || ''
   return (
-    <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 bg-transparent">
+    <header className="shrink-0 flex items-center justify-between gap-3 px-3 sm:px-6 h-14">
       <div className="flex items-center gap-2 min-w-0">
         {onMenu && (
-          <button
-            onClick={onMenu}
-            className="md:hidden p-1.5 -ml-1 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
-            title="Open conversations"
-            aria-label="Open conversations"
-          >
+          <button onClick={onMenu} title="Conversations" aria-label="Open conversations"
+            className="md:hidden p-2 -ml-1 rounded-full text-muted hover:text-text hover:bg-panel2 transition-colors">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M4 6h16M4 12h16M4 18h16" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M4 12h10M4 17h16" />
             </svg>
           </button>
         )}
-        <span className={`font-semibold tracking-tight text-[16px] text-text2 whitespace-nowrap ${hideBrand ? 'md:hidden' : ''}`}>
-          Sallaapam<span className="text-accent animate-blink">●</span>
-        </span>
+        <h1 className="text-[15px] font-semibold tracking-tight text-text2 truncate">{title}</h1>
       </div>
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <HealthDot health={health} host={host} />
-        <span className="hidden sm:inline"><Clock /></span>
-        {onTheme && (
-          <button
-            onClick={onTheme}
-            className="p-1.5 -mr-1 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
-            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-          >
-            {theme === 'dark' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
-          </button>
-        )}
         {hasProviders ? (
-          <select
-            value={activeProvider || ''}
-            onChange={(e) => onSwitchProvider(e.target.value)}
-            title="Switch provider"
-            aria-label="Switch provider"
-            className="min-w-0 max-w-[128px] sm:max-w-[240px] bg-panel2 border border-border rounded-full pl-3 pr-2 py-1.5 text-[12px] small-caps text-text2 outline-none cursor-pointer hover:border-accent2 truncate"
-          >
-            {Object.entries(providers).map(([pid, p]) => (
-              <option key={pid} value={pid} className="bg-panel text-text normal-case">
-                {p.label}
-              </option>
-            ))}
-          </select>
+          <label className="relative flex items-center gap-2 min-w-0 max-w-[200px] sm:max-w-[320px] pl-3.5 pr-2.5 py-1.5 rounded-full bg-panel2/80 border border-border/60 hover:border-accent/50 transition-colors cursor-pointer">
+            <span className="text-[12.5px] font-medium text-text2 truncate">{current}</span>
+            {model && <span className="hidden sm:inline text-[12px] text-muted truncate">{model}</span>}
+            <svg className="w-3.5 h-3.5 shrink-0 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 9l6 6 6-6" /></svg>
+            <select value={activeProvider || ''} onChange={(e) => onSwitchProvider(e.target.value)}
+              title="Switch provider" aria-label="Switch provider"
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+              {Object.entries(providers).map(([pid, p]) => (
+                <option key={pid} value={pid} className="bg-panel text-text">{p.label}</option>
+              ))}
+            </select>
+          </label>
         ) : providerLabel ? (
-          <span className="text-[12px] text-muted small-caps truncate">
-            {providerLabel} · <span className="text-text2">{model}</span>
-          </span>
+          <span className="text-[12px] text-muted truncate">{providerLabel} · <span className="text-text2">{model}</span></span>
         ) : null}
-        {hasProviders && (
-          <span className="hidden md:inline text-[11px] text-muted small-caps">
-            <span className="text-text2">{model}</span>
-          </span>
-        )}
-        <button
-          onClick={onSettings}
-          className="p-1.5 -mr-1 rounded-lg text-muted hover:text-accent hover:bg-panel2 transition-colors"
-          title="Settings"
-          aria-label="Settings"
-        >
+        <button onClick={onSettings} title="Settings" aria-label="Settings"
+          className="md:hidden p-2 -mr-1 rounded-full text-muted hover:text-text hover:bg-panel2 transition-colors">
           <Gear className="w-5 h-5" />
         </button>
       </div>

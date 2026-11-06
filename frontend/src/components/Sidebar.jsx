@@ -214,7 +214,7 @@ export default function Sidebar({
             <span aria-hidden="true"
               className={`w-2.5 h-2.5 rounded-full bg-accent shrink-0 ${isRail ? '' : 'hidden'}`} />
             <span className={`font-semibold text-[16px] text-text whitespace-nowrap ${isRail ? 'md:hidden' : ''}`}>
-              Sallaapam
+              Chats
             </span>
           </div>
           <button
@@ -566,7 +566,7 @@ export default function Sidebar({
         )}
         <button
           onClick={() => { onSettings(); onClose?.() }}
-          className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] text-muted hover:text-text hover:bg-panel2 rounded-xl transition-colors
+          className={`md:hidden w-full flex items-center gap-2 px-3 py-2 text-[13px] text-muted hover:text-text hover:bg-panel2 rounded-xl transition-colors
             ${isRail ? 'justify-center' : 'justify-start'}`}
           aria-label="Settings"
         >

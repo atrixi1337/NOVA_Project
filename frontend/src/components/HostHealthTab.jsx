@@ -122,7 +122,7 @@ export default function HostHealthTab() {
           <button
             onClick={load}
             disabled={busy}
-            className="px-2.5 py-1 text-[12px] rounded-lg border border-border bg-black hover:border-accent2 text-muted hover:text-text disabled:opacity-40 transition-all"
+            className="px-2.5 py-1 text-[12px] rounded-lg border border-border bg-bg hover:border-accent2 text-muted hover:text-text disabled:opacity-40 transition-all"
             title="Refresh"
           >
             {busy ? 'Refreshing…' : 'Refresh'}

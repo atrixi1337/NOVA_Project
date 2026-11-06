@@ -48,7 +48,7 @@ export default function UsageDashboard() {
           <button
             onClick={load}
             disabled={busy}
-            className="px-2.5 py-1 text-[12px] rounded-lg border border-border bg-black hover:border-accent2 text-muted hover:text-text disabled:opacity-40 transition-all"
+            className="px-2.5 py-1 text-[12px] rounded-lg border border-border bg-bg hover:border-accent2 text-muted hover:text-text disabled:opacity-40 transition-all"
             title="Refresh"
           >
             {busy ? 'Refreshing…' : 'Refresh'}
@@ -129,7 +129,7 @@ export default function UsageDashboard() {
 
       <div className="text-[11px] text-muted/60">
         Usage is persisted for the lifetime of the app in the phone's local SQLite
-        <code className="mx-0.5 px-1 rounded bg-black text-[10px] text-text2/60">usage_ledger</code>
+        <code className="mx-0.5 px-1 rounded bg-bg text-[10px] text-text2/60">usage_ledger</code>
         — it survives chat clears and deletions. This is aggregate token accounting,
         not pricing; cloud providers still enforce their own safety filters per call.
       </div>
