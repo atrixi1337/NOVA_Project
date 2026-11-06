@@ -989,7 +989,7 @@ export default function App() {
             ref={tabBarRef}
             role="tablist"
             aria-label="Sections"
-            className="tabstrip flex gap-0.5 sm:gap-1 px-2 sm:px-4 pt-2 overflow-x-auto"
+            className="tabstrip flex gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 overflow-x-auto"
           >
             {TAB_ITEMS.map(([id, label]) => (
               <button
@@ -998,10 +998,10 @@ export default function App() {
                 role="tab"
                 aria-selected={tab === id}
                 onClick={() => { setTab(id); setErr(''); setLastMeta(null) }}
-                className={`shrink-0 whitespace-nowrap px-2.5 sm:px-4 py-2 text-[12px] sm:text-[13px] font-medium rounded-t-lg border-b-2 transition-all
+                className={`shrink-0 whitespace-nowrap px-3 sm:px-4 py-1.5 text-[12px] sm:text-[13px] font-medium rounded-full transition-all
                   ${tab === id
-                    ? 'text-accent2 border-accent2 bg-panel2'
-                    : 'text-muted border-transparent hover:text-text hover:bg-panel2/60'}`}>
+                    ? 'text-[#1a1000] bg-accent shadow-soft'
+                    : 'text-muted hover:text-text hover:bg-panel2'}`}>
                 {label}
               </button>
             ))}
@@ -1080,7 +1080,7 @@ export default function App() {
               {busy && messages[messages.length - 1]?.role !== 'assistant' && (
                 <div className="flex justify-start px-3 sm:px-6">
                   <div className="max-w-[820px] w-full flex gap-3">
-                    <div className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold bg-accent2 text-black">AI</div>
+                    <div className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold bg-accent2 text-black">AI</div>
                     <div className="rounded-2xl px-4 py-3.5 bg-panel2 border border-border">
                       <span className="inline-flex items-end gap-1">
                         <span className="text-[10px] uppercase text-muted/60 tracking-wider">
@@ -1214,7 +1214,7 @@ export default function App() {
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={busy}
-                    className="absolute left-2 bottom-2.5 p-1.5 rounded-lg text-muted hover:text-text hover:bg-panel2 transition-colors z-10"
+                    className="absolute left-2.5 bottom-3 p-1.5 rounded-full text-muted hover:text-text hover:bg-panel2 transition-colors z-10"
                     title="Attach image or document"
                   >
                     <AttachmentPaperclip className="w-5 h-5" />
@@ -1227,7 +1227,7 @@ export default function App() {
                     onPaste={onPasteInto}
                     rows={1}
                     placeholder="Message Sallaapam…"
-                    className={`w-full resize-none bg-panel text-text border rounded-2xl pl-10 pr-[76px] py-3 text-[16px] sm:text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40 ${
+                    className={`w-full resize-none bg-panel2 text-text border rounded-3xl shadow-soft pl-11 pr-[92px] py-3.5 text-[16px] sm:text-[14px] outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-muted/50 min-h-[44px] max-h-40 ${
                       dragOver ? 'border-accent/60' : 'border-border'
                     }`}
                   />
@@ -1235,7 +1235,7 @@ export default function App() {
                     <button
                       onClick={stopGenerating}
                       title="Stop generating"
-                      className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-err text-white font-semibold text-[13px] hover:brightness-110 transition-all flex items-center justify-center gap-1.5"
+                      className="absolute right-2 bottom-2.5 px-4 py-2 rounded-full bg-err text-white font-semibold text-[13px] hover:brightness-110 transition-all flex items-center justify-center gap-1.5"
                     >
                       <span className="text-[10px] leading-none">■</span>
                       <span>Stop</span>
@@ -1244,7 +1244,7 @@ export default function App() {
                     <button
                       onClick={send}
                       disabled={!input.trim() && attachedImages.length === 0}
-                      className="absolute right-2 bottom-2.5 px-3.5 py-1.5 rounded-xl bg-accent text-[#1a1000] font-semibold text-[13px] disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed hover:brightness-90 transition-all flex items-center justify-center gap-1.5"
+                      className="absolute right-2 bottom-2.5 px-4 py-2 rounded-full bg-accent text-[#1a1000] font-semibold text-[13px] disabled:bg-panel2 disabled:text-muted disabled:border disabled:border-border disabled:cursor-not-allowed hover:brightness-110 transition-all flex items-center justify-center gap-1.5"
                     >
                       <SendSolid className="w-4 h-4" />
                       <span>Send</span>

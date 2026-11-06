@@ -16,7 +16,7 @@ export default function LockScreen({ onUnlock, busy = false, error = '' }) {
         <Shield className="w-7 h-7 text-accent" />
       </div>
       <div>
-        <h1 className="font-serif text-[22px] text-text2">Sallaapam</h1>
+        <h1 className="font-semibold tracking-tight text-[24px] text-text2">Sallaapam</h1>
         <p className="text-[12px] text-muted mt-1 small-caps">node locked · passphrase required</p>
       </div>
       <input

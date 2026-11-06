@@ -72,19 +72,19 @@
 :root {
   /* Dark "night at the SOC" palette (RGB form so /<alpha> modifiers still work).
      Mapped 1:1 to the Tailwind `colors` in tailwind.config.js. */
-  --color-bg: 11 10 9;
-  --color-panel: 18 16 14;
-  --color-panel2: 26 25 21;
-  --color-border: 36 34 29;
-  --color-border2: 46 44 39;
-  --color-text: 214 208 194;
-  --color-text2: 239 233 218;
-  --color-muted: 154 148 132;
-  --color-faint: 58 55 47;
-  --color-sidebar: 18 16 14;
-  --color-accent: 201 162 39;
-  --color-accent2: 138 115 32;
-  --color-user: 18 16 14;
+  --color-bg: 14 13 12;
+  --color-panel: 22 21 19;
+  --color-panel2: 31 30 27;
+  --color-border: 42 40 36;
+  --color-border2: 58 55 49;
+  --color-text: 222 217 205;
+  --color-text2: 243 239 228;
+  --color-muted: 160 154 140;
+  --color-faint: 62 59 52;
+  --color-sidebar: 18 17 15;
+  --color-accent: 224 178 56;
+  --color-accent2: 196 156 46;
+  --color-user: 22 21 19;
   --color-err: 150 64 47;
   --color-ok: 63 208 122;
 }
@@ -110,7 +110,9 @@
 html, body, #root {
   height: 100%;
   margin: 0;
-  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -125,7 +127,7 @@ body {
 
 /* thin scrollbars */
 *::-webkit-scrollbar { width: 6px; height: 6px; }
-*::-webkit-scrollbar-thumb { background: rgb(var(--color-border2)); border-radius: 4px; }
+*::-webkit-scrollbar-thumb { background: rgb(var(--color-border2)); border-radius: 999px; }
 *::-webkit-scrollbar-track { background: transparent; }
 
 /* Tab strip: swipe horizontally on phones without a visible scrollbar. */
@@ -141,7 +143,8 @@ button, select, input, textarea {
 }
 
 /* subtle press feedback on all buttons */
-button:not(:disabled):active { transform: scale(0.98); }
+button:not(:disabled):active { transform: scale(0.97); }
+input, textarea, select { border-radius: inherit; }
 
 /* amber selection (melancholic touch) */
 ::selection { background: rgb(var(--color-accent)); color: rgb(var(--color-bg)); }
@@ -150,11 +153,10 @@ button:not(:disabled):active { transform: scale(0.98); }
 :focus-visible {
   outline: 2px solid rgb(var(--color-accent) / 0.55);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 
 /* small-caps utility for SOC-style labels */
-.small-caps { font-variant: small-caps; text-transform: uppercase; font-size: .8em; letter-spacing: .03em; }
+.small-caps { font-weight: 500; letter-spacing: 0; }
 
 /* Markdown rendering inside assistant bubbles */
 .md p { margin: 0.4em 0; }
@@ -168,9 +170,9 @@ button:not(:disabled):active { transform: scale(0.98); }
 .md ul { list-style: disc; }
 .md ol { list-style: decimal; }
 .md li { margin: 0.2em 0; }
-.md a { color: #c9a227; text-decoration: underline; }
+.md a { color: #e0b238; text-decoration: underline; }
 .md blockquote {
-  border-left: 2px solid #2e2c27; margin: 0.5em 0; padding: 0.2em 0.9em; color: #827d70;
+  border-left: 3px solid #3a3731; border-radius: 2px; margin: 0.5em 0; padding: 0.2em 0.9em; color: #827d70;
   font-style: italic;
 }
 .md table { border-collapse: collapse; margin: 0.6em 0; width: 100%; font-size: 0.92em; }
@@ -183,8 +185,8 @@ button:not(:disabled):active { transform: scale(0.98); }
    layout and scrolls horizontally instead of wrapping (wrapping destroys
    indentation). Inline code still wraps normally. */
 .codeblock {
-  border: 1px solid #24221d;
-  border-radius: 8px;
+  border: 1px solid #2a2824;
+  border-radius: 14px;
   margin: 0.6em 0;
   background: #0b0a09;
   overflow: hidden;
@@ -225,10 +227,10 @@ button:not(:disabled):active { transform: scale(0.98); }
   font-size: 0.88em;
 }
 .md :not(pre) > code {
-  background: #12100e;
-  border: 1px solid #24221d;
-  border-radius: 4px;
-  padding: 1px 5px;
+  background: #1f1e1b;
+  border: 1px solid #2a2824;
+  border-radius: 7px;
+  padding: 1px 6px;
 }
 .md pre code { background: transparent; border: none; padding: 0; white-space: pre; }
 
@@ -236,10 +238,10 @@ button:not(:disabled):active { transform: scale(0.98); }
 .copy-btn {
   font-size: 11px;
   padding: 3px 8px;
-  border-radius: 6px;
-  border: 1px solid #24221d;
-  background: #12100e;
-  color: #827d70;
+  border-radius: 999px;
+  border: 1px solid #2a2824;
+  background: #1f1e1b;
+  color: #9a9484;
   cursor: pointer;
   transition: opacity 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   font-family: 'IBM Plex Mono', monospace;

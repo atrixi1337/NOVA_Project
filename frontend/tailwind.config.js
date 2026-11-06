@@ -26,10 +26,26 @@ export default {
         err: 'rgb(var(--color-err) / <alpha-value>)',
         ok: 'rgb(var(--color-ok) / <alpha-value>)',
       },
+      // Modern pass: UI text uses the platform's native sans (zero download,
+      // crisp on the phone); IBM Plex Mono stays for code. Radii are bumped one
+      // step across the board so every existing rounded-* utility gets softer.
       fontFamily: {
-        sans: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
+        sans: ['ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', 'sans-serif'],
         mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
-        serif: ['Cormorant Garamond', 'Georgia', 'serif'],
+        serif: ['ui-sans-serif', 'system-ui', '-apple-system', '"Segoe UI"', 'Roboto', 'sans-serif'],
+      },
+      borderRadius: {
+        sm: '0.5rem',
+        DEFAULT: '0.625rem',
+        md: '0.75rem',
+        lg: '1rem',
+        xl: '1.25rem',
+        '2xl': '1.5rem',
+        '3xl': '1.75rem',
+      },
+      boxShadow: {
+        soft: '0 1px 2px rgb(0 0 0 / 0.18), 0 4px 16px -4px rgb(0 0 0 / 0.28)',
+        float: '0 8px 30px -8px rgb(0 0 0 / 0.5)',
       },
       keyframes: {
         blink: { '0%, 100%': { opacity: '1' }, '50%': { opacity: '0' } },

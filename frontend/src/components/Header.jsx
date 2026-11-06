@@ -122,7 +122,7 @@ function HealthDot({ health, host }) {
 export default function Header({ onSettings, onMenu, providerLabel, model, providers = {}, activeProvider, onSwitchProvider, health, host, theme = 'dark', onTheme, hideBrand = false }) {
   const hasProviders = onSwitchProvider && Object.keys(providers).length > 0
   return (
-    <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 bg-panel border-b border-border">
+    <header className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 bg-panel/90 backdrop-blur border-b border-border/70">
       <div className="flex items-center gap-2 min-w-0">
         {onMenu && (
           <button
@@ -137,7 +137,7 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
             </svg>
           </button>
         )}
-        <span className={`font-serif text-[15px] text-text2 whitespace-nowrap ${hideBrand ? 'md:hidden' : ''}`}>
+        <span className={`font-semibold tracking-tight text-[16px] text-text2 whitespace-nowrap ${hideBrand ? 'md:hidden' : ''}`}>
           Sallaapam<span className="text-accent animate-blink">●</span>
         </span>
       </div>
@@ -160,7 +160,7 @@ export default function Header({ onSettings, onMenu, providerLabel, model, provi
             onChange={(e) => onSwitchProvider(e.target.value)}
             title="Switch provider"
             aria-label="Switch provider"
-            className="min-w-0 max-w-[128px] sm:max-w-[240px] bg-panel border border-border rounded-lg pl-2 pr-1 py-1 text-[11px] small-caps text-text2 outline-none cursor-pointer hover:border-accent2 truncate"
+            className="min-w-0 max-w-[128px] sm:max-w-[240px] bg-panel2 border border-border rounded-full pl-3 pr-2 py-1.5 text-[12px] small-caps text-text2 outline-none cursor-pointer hover:border-accent2 truncate"
           >
             {Object.entries(providers).map(([pid, p]) => (
               <option key={pid} value={pid} className="bg-panel text-text normal-case">
