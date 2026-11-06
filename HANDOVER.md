@@ -433,7 +433,40 @@ After the hardening deploy the public URL served a **blank page**. Diagnosed as 
 
 ---
 
-## 17. Quick reference card (operator)
+## 17. Benchmark Arena + provider sanity check (2026-11-06)
+
+The **Benchmark** tab (`frontend/src/components/bench/`) turns the old Arena into a graded LLM benchmark for the SOC lab.
+*Live compare* (the original streaming side-by-side view, now up to 8 providers) is a toggle inside the same tab. The old
+standalone Benchmark tab was folded into this one (`/api/bench/run` + `/api/bench/runs` still exist for scripts).
+
+* **Contenders** - any number of `provider/model` pairs (max `NOVA_BENCH_MAX_CONTENDERS`=40, `NOVA_BENCH_MAX_CELLS`=500). One provider can
+  contribute many models. **Judge** - a stronger model grades every answer 0-10 against a per-task rubric (JSON verdict + criteria +
+  rationale); deterministic checks (JSON validity/fields, ATT&CK IDs, rule syntax, "no fabricated CVE") are computed by code and shown
+  to the judge as evidence. No judge = checks-only. A judge that is also a contender is flagged `self_judged`.
+* **Suites** (`bench_suites.py`, pure/testable): `soc` (11 tasks: 3 triage cases using the triage-agent's real prompt, MITRE mapping,
+  web-log analysis, Wazuh rule, Sigma rule, IOC extraction+refang, exec summary, hallucination guard, ransomware playbook),
+  `general` (6 quick prompts), `custom` (`prompt || rubric` per line). The SOC suite's "Best for your SOC triage agent" panel ranks on
+  the *Alert triage* category and offers `TRIAGE_LLM_MODEL=<provider/model>` (the NOVA gateway id) for `triage-agent/.env`.
+* **Scoring**: cell = judge score (0-100), else % of deterministic checks, else ungraded. Leaderboard = mean score; a failed/timed-out cell
+  counts 0 (reliability is part of the score). Also pass-rate (>=70), median latency, tokens, cost (ledger-priced).
+* **Jobs are async** (a phone run takes minutes; Cloudflare cuts requests at ~100 s): `POST /api/bench/jobs` -> poll
+  `GET /api/bench/jobs/{id}` (`?full=1` for full answers), `POST .../cancel`, `DELETE`, `GET /api/bench/jobs` (history in table
+  `bench_jobs`). Limits: `NOVA_BENCH_CONCURRENCY` (default 3, UI up to 8), `NOVA_BENCH_PER_PROVIDER`=2 (Mistral free tier forced to 1),
+  judge calls run in their own lane (`NOVA_BENCH_JUDGE_CONCURRENCY`=4), `NOVA_BENCH_CELL_TIMEOUT_S`=150, max 2 running jobs.
+  Running jobs live in memory; a restart marks them `interrupted` (finished jobs persist).
+* **Provider sanity check** (`POST /api/providers/sanity`, poll `GET /api/providers/sanity/{id}`; UI: collapsible panel in the Benchmark tab):
+  a real chat ping per configured provider (`deep:true` = every configured model) plus a live `GET {base}/models` comparison that lists
+  **configured models the provider no longer serves**. Run it after changing keys or model lists - this is how the dead defaults below were found.
+
+**Findings on 2026-11-06 (fixed in code defaults + `.env.example`)**: NVIDIA NIM's catalog lists 84 ids but only 9 answer promptly (most 404
+"Function not found", six time out >170 s) - `NVIM_MODELS`/`NVIM_MODEL` now hold only the verified 9 (default `nvidia/nemotron-3-ultra-550b-a55b`;
+the old default `nemotron-4-340b-instruct` was dead). Agnes `agnes-2.5-pro` retired -> `agnes-3.0-flash`; Mistral `mistral-large-latest`/`open-mistral-7b`
+retired -> `mistral-large-4`, `mistral-medium-latest`, `codestral-latest`; Amazon `nova-premier-v1` and Cohere `command-r-plus` removed;
+Inception `mercury-2` deprecated -> `mercury-3`. Still failing on the dev box (config, not code): Foundry/Cloudflare `.env` hold placeholder
+resource/account ids, HuggingFace Router needs prepaid credits (402), Reka 403, GMI/Infron have no key. **The phone's `.env` still carries its own
+model-list overrides - sync `MISTRAL_MODELS`, `NVIM_*`, `AGNES_*`, `COHERE_MODELS` there** (code defaults only apply when the var is unset).
+
+## 18. Quick reference card (operator)
 
 ```bash
 # Deploy a backend.py / mobile.html change to the phone

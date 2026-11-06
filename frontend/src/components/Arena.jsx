@@ -30,7 +30,7 @@ export default function Arena({ providers = {}, health, malayalamMode = false, s
   const toggle = (pid) => {
     setSelected((s) => {
       if (s.includes(pid)) return s.filter((x) => x !== pid)
-      if (s.length >= 4) return s // cap at 4 columns
+      if (s.length >= 8) return s // cap at 8 columns
       return [...s, pid]
     })
   }
@@ -85,8 +85,8 @@ export default function Arena({ providers = {}, health, malayalamMode = false, s
       <div className="border-b border-border bg-panel p-3">
         <div className="mx-auto max-w-[1100px] space-y-2">
           <div className="flex items-center justify-between text-[11px] text-muted small-caps">
-            <span>Arena — same prompt, up to 4 providers, live side-by-side</span>
-            <span>{selected.length}/4 selected · not saved to history</span>
+            <span>Live compare — same prompt, up to 8 providers, streamed side-by-side</span>
+            <span>{selected.length}/8 selected · not saved to history</span>
           </div>
           <textarea
             ref={inputRef}
@@ -144,7 +144,7 @@ export default function Arena({ providers = {}, health, malayalamMode = false, s
         {runs.length === 0 ? (
           <div className="h-full flex items-center justify-center text-center px-6">
             <div className="space-y-2 max-w-sm">
-              <div className="text-[14px] text-text2">Pick 2–4 providers, ask once.</div>
+              <div className="text-[14px] text-text2">Pick 2–8 providers, ask once.</div>
               <p className="text-[12px] text-muted">
                 Answers stream in side-by-side with latency and token counts — a quick gut check
                 of who reasons best, who's fastest, and who refuses.

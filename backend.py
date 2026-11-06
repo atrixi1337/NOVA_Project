@@ -36,6 +36,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import re
+import bench_suites as bs
 
 # EVTX (Windows Event Log) is binary; parse it with python-evtx into compact text.
 try:
@@ -108,7 +109,7 @@ COHERE_API_KEY = os.getenv("COHERE_API_KEY", "")
 COHERE_DEFAULT_MODEL = os.getenv("COHERE_MODEL", "command-a-plus-05-2026")
 # Models offered for the Cohere provider in the UI picker.
 COHERE_MODELS = [
-    m.strip() for m in os.getenv("COHERE_MODELS", "command-a-plus-05-2026,command-r7b-12-2024,command-r-plus").split(",") if m.strip()
+    m.strip() for m in os.getenv("COHERE_MODELS", "command-a-plus-05-2026,command-r7b-12-2024").split(",") if m.strip()
 ]
 
 # ---- provider: Local Ollama (OpenAI-compatible /v1; uncensored local models) ----
@@ -198,7 +199,7 @@ MISTRAL_DEFAULT_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
 MISTRAL_MODELS = [
     m.strip() for m in os.getenv(
         "MISTRAL_MODELS",
-        "mistral-small-latest,mistral-large-latest,open-mistral-7b,ministral-8b-latest",
+        "mistral-small-latest,mistral-large-4,mistral-medium-latest,ministral-8b-latest,codestral-latest",  # mistral-large-latest/open-mistral-7b retired
     ).split(",") if m.strip()
 ]
 
@@ -238,13 +239,13 @@ INCEPTION_MODELS = [
 # agnes-2.0-flash, agnes-2.5-pro-alpha.)
 AGNES_BASE_URL = os.getenv("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
 AGNES_API_KEY = os.getenv("AGNES_API_KEY", "")
-AGNES_DEFAULT_MODEL = os.getenv("AGNES_MODEL", "agnes-2.5-pro")
+AGNES_DEFAULT_MODEL = os.getenv("AGNES_MODEL", "agnes-3.0-flash")
 # Models offered for the Agnes provider in the UI picker.
 AGNES_MODELS = [
     m.strip()
     for m in os.getenv(
         "AGNES_MODELS",
-        "agnes-2.5-pro,agnes-2.5-pro-beta,agnes-2.5-flash",
+        "agnes-3.0-flash,agnes-2.5-flash",  # agnes-2.5-pro was retired; the -pro-alpha/-beta ids 403 on this key
     ).split(",")
     if m.strip()
 ]
@@ -294,20 +295,22 @@ REKA_MODELS = [
 # image generation stays on the Foundry DALL·E path (/api/images).
 NVIM_BASE_URL = os.getenv("NVIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
 NVIM_API_KEY = os.getenv("NVIM_API_KEY", "")
-NVIM_DEFAULT_MODEL = os.getenv("NVIM_MODEL", "nvidia/nemotron-4-340b-instruct")
-# Models offered for the NVIDIA NIM provider in the UI picker (curated from the
-# live /v1/models catalog). Tailor NVIM_MODELS in .env to your quota.
+NVIM_DEFAULT_MODEL = os.getenv("NVIM_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+# Models offered for the NVIDIA NIM provider in the UI picker. The public /v1/models
+# catalog lists ~84 ids but most return 404 "Function not found" for a free account
+# (listed, not deployed) or time out for minutes. This list is only models verified to
+# ANSWER promptly with a real chat call (2026-11-06) - re-verify any time with the
+# Benchmark tab's "Provider sanity check" (tick "test every configured model").
+# Excluded on purpose: meta/muse-glimmer-30b (works but ~90s), google/diffusiongemma
+# (returns empty content), and the catalog ids that 404/time out. Override via NVIM_MODELS.
 NVIM_MODELS = [
     m.strip()
     for m in os.getenv(
         "NVIM_MODELS",
-        "nvidia/nemotron-4-340b-instruct,nvidia/llama-3.1-nemotron-70b-instruct,"
-        "nvidia/llama-3.1-nemotron-ultra-253b-v1,nvidia/nemotron-3.5-lightning-30b-a3b,"
-        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia/nemotron-3-super-120b-a12b,"
-        "meta/llama-3.2-90b-vision-instruct,meta/llama-3.2-11b-vision-instruct,"
-        "microsoft/phi-3-vision-128k-instruct,mistralai/mistral-large,"
-        "mistralai/mistral-nemotron,moonshotai/kimi-k2.6,"
-        "deepseek-ai/deepseek-v4-pro-0813,ibm/granite-34b-code-instruct",
+        "nvidia/nemotron-3-ultra-550b-a55b,mistralai/mistral-large-4-1t-a52b,"
+        "nvidia/nemotron-3.5-super-vl-120b-a12b,nvidia/nemotron-3.5-lightning-30b-a3b,"
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,nvidia/nemotron-3.5-bolt-e4b,"
+        "poolside/laguna-xs-2.1,stepfun-ai/step-5-preview,google/gemma-4-31b-it",
     ).split(",")
     if m.strip()
 ]
@@ -503,8 +506,7 @@ AVAILABLE_MODELS = [
     "nova-micro-v1",
     "nova-lite-v1",
     "nova-pro-v1",
-    "nova-premier-v1",
-    "nova-2-lite-v1",
+    "nova-2-lite-v1",   # nova-premier-v1 is no longer in the catalog
 ]
 
 # Which provider the UI defaults to on load.
@@ -2431,6 +2433,24 @@ def init_db() -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_bench_created ON bench_runs(created_at DESC)")
+    # Graded Benchmark Arena jobs (full result snapshot stored as JSON once a run ends).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bench_jobs (
+            id          TEXT PRIMARY KEY,
+            label       TEXT NOT NULL DEFAULT '',
+            suite_id    TEXT NOT NULL,
+            status      TEXT NOT NULL,
+            total       INTEGER NOT NULL DEFAULT 0,
+            judge       TEXT,
+            actor       TEXT,
+            created_at  REAL NOT NULL,
+            finished_at REAL,
+            result_json TEXT
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_benchjobs_created ON bench_jobs(created_at DESC)")
     conn.commit()
     conn.close()
 
@@ -4407,6 +4427,475 @@ async def bench_history(request: Request, limit: int = 100):
             for r in rows
         ]
     }
+
+
+# ----------------------------------------------------------------------------
+# Graded Benchmark Arena + provider sanity check
+#
+# Many contenders (provider/model pairs - one provider may appear with several
+# models) answer a task suite; a stronger "judge" model grades every answer
+# against a rubric and deterministic checks add hard evidence. Runs are async
+# jobs the UI polls: a phone-hosted run takes minutes, far past the Cloudflare
+# request timeout. Suites + grading logic live in bench_suites.py.
+# ----------------------------------------------------------------------------
+NOVA_BENCH_MAX_CONTENDERS = max(1, int(os.getenv("NOVA_BENCH_MAX_CONTENDERS", "40")))
+NOVA_BENCH_MAX_CELLS = max(1, int(os.getenv("NOVA_BENCH_MAX_CELLS", "500")))
+NOVA_BENCH_CELL_TIMEOUT_S = max(5.0, float(os.getenv("NOVA_BENCH_CELL_TIMEOUT_S", "150")))  # big reasoning models can take >90s
+NOVA_BENCH_JUDGE_CONCURRENCY = max(1, int(os.getenv("NOVA_BENCH_JUDGE_CONCURRENCY", "4")))
+NOVA_BENCH_PER_PROVIDER = max(1, int(os.getenv("NOVA_BENCH_PER_PROVIDER", "2")))
+NOVA_BENCH_MAX_RUNNING = max(1, int(os.getenv("NOVA_BENCH_MAX_RUNNING", "2")))
+# Free tiers that 429 on parallel calls get a tighter per-provider cap than NOVA_BENCH_PER_PROVIDER.
+_BENCH_PROVIDER_CAP: Dict[str, int] = {"mistral": 1}
+
+
+def _bench_provider_sem(pid: str) -> asyncio.Semaphore:
+    return asyncio.Semaphore(min(NOVA_BENCH_PER_PROVIDER, _BENCH_PROVIDER_CAP.get(pid, NOVA_BENCH_PER_PROVIDER)))
+NOVA_SANITY_TIMEOUT_S = max(5.0, float(os.getenv("NOVA_SANITY_TIMEOUT_S", "45")))
+_BENCH_JOBS: Dict[str, Dict[str, Any]] = {}
+_SANITY_JOBS: Dict[str, Dict[str, Any]] = {}
+_JOB_KEEP = 20
+
+
+def _reply_text(data: Dict[str, Any]) -> str:
+    try:
+        msg = data["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    c = msg.get("content")
+    if isinstance(c, list):
+        return "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in c)
+    return c or ""
+
+
+async def _bench_call(pid: str, model: str, messages: List[Dict[str, Any]],
+                      extra: Optional[Dict[str, Any]] = None,
+                      timeout: Optional[float] = None) -> Dict[str, Any]:
+    """One provider call with a hard timeout and up to two retries on 429/5xx.
+    Calls call_llm directly: a benchmark must measure the provider asked for,
+    so it never fails over to another one."""
+    limit = timeout or NOVA_BENCH_CELL_TIMEOUT_S
+    for attempt in range(3):
+        try:
+            return await asyncio.wait_for(
+                call_llm(messages, model, _provider_key(pid), pid, extra_params=extra), timeout=limit)
+        except asyncio.TimeoutError:
+            raise HTTPException(504, f"timed out after {int(limit)}s")
+        except HTTPException as e:
+            if attempt < 2 and e.status_code in (429, 500, 502, 503, 504):
+                await asyncio.sleep(4 * (attempt + 1))   # 4s, then 8s
+                continue
+            raise
+    raise HTTPException(500, "unreachable")  # pragma: no cover
+
+
+class BenchContender(BaseModel):
+    provider: str
+    model: str = ""
+
+
+class BenchJobCreate(BaseModel):
+    label: str = ""
+    suite_id: str = "soc"
+    tasks: Optional[List[Dict[str, Any]]] = None   # custom suite: [{prompt, rubric?, title?}]
+    contenders: List[BenchContender]
+    judge: Optional[BenchContender] = None          # None = no LLM judge (deterministic checks only)
+    concurrency: Optional[int] = None
+    max_tokens: Optional[int] = None                # cap on each contender's answer (None = provider default)
+
+
+def _bench_providers_models() -> Dict[str, List[str]]:
+    return {pid: list(p["models"]) for pid, p in PROVIDERS.items()}
+
+
+@app.get("/api/bench/suites")
+async def bench_suites_list(request: Request):
+    _check_actor_limits(request)
+    configured = {pid for pid in PROVIDERS if _provider_key(pid)}
+    return {
+        "suites": [bs.suite_public(s) for s in bs.SUITES.values()],
+        "judge_suggestions": bs.suggest_judges(_bench_providers_models(), configured),
+        "limits": {"max_contenders": NOVA_BENCH_MAX_CONTENDERS, "max_cells": NOVA_BENCH_MAX_CELLS,
+                   "default_concurrency": NOVA_BENCH_CONCURRENCY, "max_concurrency": 8},
+        "pass_score": bs.PASS_SCORE,
+    }
+
+
+def _bench_job_view(job: Dict[str, Any], full: bool = False) -> Dict[str, Any]:
+    cells = []
+    for c in job["cells"]:
+        cc = dict(c)
+        out = cc.get("output") or ""
+        cc["output_len"] = len(out)
+        cc["output"] = out if full else out[:400]
+        cells.append(cc)
+    return {
+        "id": job["id"], "label": job["label"], "suite_id": job["suite_id"], "status": job["status"],
+        "created_at": job["created_at"], "finished_at": job.get("finished_at"),
+        "total": job["total"], "done": job["done"], "answered": job.get("answered", job["done"]), "judge": job["judge"],
+        "tasks": job["tasks_public"], "contenders": job["contenders"], "warnings": job.get("warnings", []),
+        "cells": cells, "leaderboard": bs.build_leaderboard(job["cells"], len(job["tasks_public"])),
+        "pass_score": bs.PASS_SCORE,
+    }
+
+
+def _bench_persist(job: Dict[str, Any]) -> None:
+    try:
+        view = _bench_job_view(job, full=True)
+        conn = _db()
+        conn.execute(
+            "INSERT OR REPLACE INTO bench_jobs (id,label,suite_id,status,total,judge,actor,created_at,finished_at,result_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (job["id"], job["label"], job["suite_id"], job["status"], job["total"],
+             json.dumps(job["judge"]) if job["judge"] else None, job["actor"], job["created_at"],
+             job.get("finished_at"), json.dumps(view)),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:  # noqa: BLE001 - persistence must never break a run
+        logger.exception("bench job persist failed")
+
+
+async def _bench_grade(job: Dict[str, Any], task: Dict[str, Any], cell: Dict[str, Any], jsem: asyncio.Semaphore) -> None:
+    checks = bs.run_checks(cell.get("output", ""), task.get("checks"))
+    cell.update(det_passed=checks["passed"], det_total=checks["total"], det=checks["details"])
+    judge_res, jerr = None, None
+    judge = job["judge"]
+    if cell["status"] == "ok" and not (cell.get("output") or "").strip():
+        cell.update(score=0.0, judge=None, judge_error="empty answer")
+        return
+    if judge and cell["status"] == "ok":
+        msgs = bs.build_judge_messages(task, cell["output"], checks)
+        for attempt in range(2):
+            try:
+                async with jsem:   # judge calls have their own lane so they never starve (or are starved by) contenders
+                    data = await _bench_call(judge["provider"], judge["model"],
+                                             msgs if attempt == 0 else msgs + [{"role": "user", "content":
+                                             "That was not valid JSON. Reply with ONLY the JSON object."}])
+                usage = data.get("usage") or {}
+                db_record_usage(judge["provider"], judge["model"], usage or None, job["actor"] or "bench")
+                judge_res = bs.parse_judge(_reply_text(data))
+                if judge_res:
+                    break
+                jerr = "judge returned unparseable output"
+            except HTTPException as e:
+                jerr = f"judge error: {e.detail}"
+                break
+            except Exception as e:  # noqa: BLE001
+                jerr = f"judge error: {e!r}"
+                break
+    cell["judge"] = judge_res
+    cell["judge_error"] = jerr
+    cell["score"] = bs.cell_score(judge_res, checks)
+
+
+async def _bench_job_run(job: Dict[str, Any], tasks: List[Dict[str, Any]], extra: Optional[Dict[str, Any]]) -> None:
+    gsem = asyncio.Semaphore(job["concurrency"])
+    jsem = asyncio.Semaphore(min(job["concurrency"], NOVA_BENCH_JUDGE_CONCURRENCY))
+    psems: Dict[str, asyncio.Semaphore] = {}
+
+    def psem(pid: str) -> asyncio.Semaphore:
+        if pid not in psems:
+            psems[pid] = _bench_provider_sem(pid)
+        return psems[pid]
+
+    task_by_id = {t["id"]: t for t in tasks}
+
+    async def run_cell(cell: Dict[str, Any]) -> None:
+        task = task_by_id[cell["task_id"]]
+        try:
+            if job["cancel"]:
+                cell["status"] = "cancelled"
+                return
+            pid, model = cell["provider"], cell["model"]
+            err = None
+            data: Dict[str, Any] = {}
+            async with psem(pid), gsem:
+                if job["cancel"]:
+                    cell["status"] = "cancelled"
+                    return
+                cell["status"] = "running"
+                started = time.time()
+                try:
+                    data = await _bench_call(pid, model, task["messages"], extra)
+                except HTTPException as e:
+                    err = str(e.detail)
+                except Exception as e:  # noqa: BLE001 - a cell must never fail the job
+                    err = repr(e)
+                cell["latency_ms"] = int((time.time() - started) * 1000)
+            if err is not None:
+                cell.update(status="error", error=err[:300], output="")
+                job["answered"] += 1
+                return
+            text = _reply_text(data)
+            usage = data.get("usage") or {}
+            db_record_usage(pid, model, usage or None, job["actor"] or "bench")
+            cell.update(status="ok", output=text[:8000], total_tokens=usage.get("total_tokens"),
+                        prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"),
+                        cost_usd=_cost_usd(pid, model, usage))
+            job["answered"] += 1
+            await _bench_grade(job, task, cell, jsem)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("bench cell failed")
+            cell.update(status="error", error=f"internal: {e!r}"[:300])
+        finally:
+            if cell["status"] in ("running", "queued"):
+                cell["status"] = "error"
+            job["done"] += 1
+
+    try:
+        await asyncio.gather(*(run_cell(c) for c in job["cells"]))
+        job["status"] = "cancelled" if job["cancel"] else "done"
+    except Exception:  # noqa: BLE001
+        logger.exception("bench job crashed")
+        job["status"] = "error"
+    finally:
+        job["finished_at"] = time.time()
+        _bench_persist(job)
+
+
+@app.post("/api/bench/jobs")
+async def bench_job_create(request: Request, body: BenchJobCreate):
+    _check_actor_limits(request)
+    actor = getattr(request.state, "actor", "") or ""
+    if body.tasks is not None:
+        tasks, suite_id = bs.custom_tasks(body.tasks), "custom"
+    else:
+        suite = bs.SUITES.get(body.suite_id)
+        if not suite:
+            raise HTTPException(400, f"Unknown suite '{body.suite_id}'.")
+        tasks, suite_id = suite["tasks"], suite["id"]
+    if not tasks:
+        raise HTTPException(400, "The suite has no runnable prompts.")
+    seen, contenders, problems = set(), [], []
+    for it in body.contenders:
+        pid = (it.provider or "").strip()
+        if pid not in PROVIDERS:
+            problems.append(f"unknown provider '{pid}'")
+            continue
+        if not _provider_key(pid):
+            problems.append(f"{PROVIDERS[pid]['label']}: no API key configured")
+            continue
+        model = _resolve_model(pid, it.model or "")
+        key = f"{pid}/{model}"
+        if key not in seen:
+            seen.add(key)
+            contenders.append({"key": key, "provider": pid, "model": model, "label": PROVIDERS[pid]["label"]})
+    if not contenders:
+        raise HTTPException(400, "No usable contenders: " + "; ".join(problems or ["none selected"]))
+    if len(contenders) > NOVA_BENCH_MAX_CONTENDERS:
+        raise HTTPException(400, f"Too many contenders ({len(contenders)} > {NOVA_BENCH_MAX_CONTENDERS}).")
+    if len(contenders) * len(tasks) > NOVA_BENCH_MAX_CELLS:
+        raise HTTPException(400, f"That is {len(contenders) * len(tasks)} cells (max {NOVA_BENCH_MAX_CELLS}); trim contenders or tasks.")
+    judge = None
+    if body.judge and (body.judge.provider or "").strip():
+        jp = body.judge.provider.strip()
+        if jp not in PROVIDERS or not _provider_key(jp):
+            raise HTTPException(400, f"Judge provider '{jp}' is unknown or has no API key.")
+        jm = _resolve_model(jp, body.judge.model or "")
+        judge = {"provider": jp, "model": jm, "key": f"{jp}/{jm}", "label": PROVIDERS[jp]["label"]}
+    running = sum(1 for j in _BENCH_JOBS.values() if j["status"] == "running")
+    if running >= NOVA_BENCH_MAX_RUNNING:
+        raise HTTPException(429, f"{running} benchmark(s) already running; wait for one to finish.")
+    conc = max(1, min(int(body.concurrency or NOVA_BENCH_CONCURRENCY), 8))
+    jid = uuid.uuid4().hex[:12]
+    cells = []
+    n = 0
+    for t in tasks:
+        for c in contenders:
+            cells.append({"n": n, "key": c["key"], "provider": c["provider"], "model": c["model"],
+                          "task_id": t["id"], "category": t["category"], "title": t["title"], "status": "queued",
+                          "self_judged": bool(judge and judge["key"] == c["key"]),
+                          "score": None, "judge": None, "output": ""})
+            n += 1
+    job = {"id": jid, "label": (body.label or "").strip()[:80], "suite_id": suite_id, "status": "running",
+           "created_at": time.time(), "finished_at": None, "total": len(cells), "done": 0, "answered": 0, "cancel": False,
+           "concurrency": conc, "judge": judge, "actor": actor, "contenders": contenders, "cells": cells,
+           "warnings": problems,
+           "tasks_public": [{"id": t["id"], "category": t["category"], "title": t["title"]} for t in tasks]}
+    _BENCH_JOBS[jid] = job
+    for old in sorted(_BENCH_JOBS.values(), key=lambda j: j["created_at"])[:-_JOB_KEEP]:
+        if old["status"] != "running":
+            _BENCH_JOBS.pop(old["id"], None)
+    extra = {"max_tokens": int(body.max_tokens)} if body.max_tokens else None
+    _bench_persist(job)
+    job["_task"] = asyncio.create_task(_bench_job_run(job, tasks, extra))
+    return {"job_id": jid, "total": len(cells), "contenders": len(contenders), "tasks": len(tasks), "warnings": problems}
+
+
+@app.get("/api/bench/jobs")
+async def bench_job_list(request: Request, limit: int = 30):
+    _check_actor_limits(request)
+    conn = _db()
+    rows = conn.execute(
+        "SELECT id,label,suite_id,status,total,judge,created_at,finished_at FROM bench_jobs ORDER BY created_at DESC LIMIT ?",
+        (max(1, min(limit, 100)),)).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        live = _BENCH_JOBS.get(r["id"])
+        status = live["status"] if live else ("interrupted" if r["status"] == "running" else r["status"])
+        out.append({"id": r["id"], "label": r["label"], "suite_id": r["suite_id"], "status": status,
+                    "total": r["total"], "done": live["done"] if live else None,
+                    "judge": json.loads(r["judge"]) if r["judge"] else None,
+                    "created_at": r["created_at"], "finished_at": r["finished_at"]})
+    return {"jobs": out}
+
+
+@app.get("/api/bench/jobs/{jid}")
+async def bench_job_get(request: Request, jid: str, full: bool = False):
+    _check_actor_limits(request)
+    job = _BENCH_JOBS.get(jid)
+    if job:
+        return _bench_job_view(job, full=full)
+    conn = _db()
+    row = conn.execute("SELECT result_json, status FROM bench_jobs WHERE id = ?", (jid,)).fetchone()
+    conn.close()
+    if not row or not row["result_json"]:
+        raise HTTPException(404, "Unknown benchmark job.")
+    view = json.loads(row["result_json"])
+    if row["status"] == "running":
+        view["status"] = "interrupted"
+    if not full:
+        for c in view.get("cells", []):
+            c["output"] = (c.get("output") or "")[:400]
+    return view
+
+
+@app.post("/api/bench/jobs/{jid}/cancel")
+async def bench_job_cancel(request: Request, jid: str):
+    _check_actor_limits(request)
+    job = _BENCH_JOBS.get(jid)
+    if not job:
+        raise HTTPException(404, "Unknown or finished benchmark job.")
+    job["cancel"] = True
+    return {"ok": True}
+
+
+@app.delete("/api/bench/jobs/{jid}")
+async def bench_job_delete(request: Request, jid: str):
+    _check_actor_limits(request)
+    job = _BENCH_JOBS.get(jid)
+    if job and job["status"] == "running":
+        raise HTTPException(409, "Cancel the running job first.")
+    _BENCH_JOBS.pop(jid, None)
+    conn = _db()
+    conn.execute("DELETE FROM bench_jobs WHERE id = ?", (jid,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ---- provider sanity check ---------------------------------------------------
+class SanityRequest(BaseModel):
+    providers: Optional[List[str]] = None
+    deep: bool = False      # test EVERY configured model, not just each provider's default
+    catalog: bool = True    # compare configured models with the provider's live /models list
+
+
+async def _provider_catalog(pid: str) -> Dict[str, Any]:
+    """Ask the provider which models it really serves (OpenAI-style GET /models)."""
+    prov = PROVIDERS[pid]
+    if pid in ("cohere", "ollama"):
+        return {"ok": False, "error": "catalog lookup not supported for this provider"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as c:
+            r = await c.get(prov["base_url"].rstrip("/") + "/models", headers=nova_headers(_provider_key(pid), pid))
+        if r.status_code != 200:
+            return {"ok": False, "error": f"HTTP {r.status_code}"}
+        j = r.json()
+        items = j.get("data") if isinstance(j, dict) else j
+        if items is None and isinstance(j, dict):
+            items = j.get("models")
+        ids = set()
+        for it in items or []:
+            mid = it.get("id") or it.get("name") if isinstance(it, dict) else str(it)
+            if mid:
+                ids.add(str(mid).removeprefix("models/"))
+        if not ids:
+            return {"ok": False, "error": "catalog returned no models"}
+        missing = [m for m in prov["models"] if m not in ids and f"models/{m}" not in ids]
+        return {"ok": True, "size": len(ids), "missing": missing}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": repr(e)[:160]}
+
+
+async def _sanity_chat(pid: str, model: str) -> Dict[str, Any]:
+    started = time.time()
+    try:
+        data = await _bench_call(pid, model, [{"role": "user", "content": "Reply with the single word: pong"}],
+                                 {"max_tokens": 400}, timeout=NOVA_SANITY_TIMEOUT_S)
+        ms = int((time.time() - started) * 1000)
+        text = _reply_text(data).strip()
+        return {"model": model, "status": "ok" if text else "empty", "ms": ms, "reply": text[:40],
+                "note": "" if text else "HTTP 200 but empty content (reasoning model burning the token budget?)"}
+    except HTTPException as e:
+        return {"model": model, "status": "error", "ms": int((time.time() - started) * 1000), "note": str(e.detail)[:200]}
+    except Exception as e:  # noqa: BLE001
+        return {"model": model, "status": "error", "ms": int((time.time() - started) * 1000), "note": repr(e)[:200]}
+
+
+async def _sanity_run(job: Dict[str, Any], req: SanityRequest) -> None:
+    pids = [p for p in (req.providers or list(PROVIDERS)) if p in PROVIDERS]
+    gsem = asyncio.Semaphore(4)
+
+    async def one(pid: str) -> None:
+        prov = PROVIDERS[pid]
+        entry = job["providers"][pid]
+        if not _provider_key(pid):
+            entry["state"] = "no-key"
+            return
+        entry["state"] = "running"
+        models = list(dict.fromkeys(prov["models"] if req.deep else [prov["default_model"]]))
+        if prov["default_model"] not in models:
+            models.insert(0, prov["default_model"])
+        async with gsem:
+            if req.catalog:
+                entry["catalog"] = await _provider_catalog(pid)
+            psem = _bench_provider_sem(pid)
+
+            async def chk(m: str) -> None:
+                async with psem:
+                    entry["models"].append(await _sanity_chat(pid, m))
+            await asyncio.gather(*(chk(m) for m in models))
+        entry["models"].sort(key=lambda r: (r["model"] != prov["default_model"], r["model"]))
+        entry["state"] = "done"
+
+    try:
+        await asyncio.gather(*(one(p) for p in pids))
+        job["status"] = "done"
+    except Exception:  # noqa: BLE001
+        logger.exception("sanity run crashed")
+        job["status"] = "error"
+    finally:
+        job["finished_at"] = time.time()
+
+
+@app.post("/api/providers/sanity")
+async def providers_sanity_start(request: Request, body: SanityRequest):
+    _check_actor_limits(request)
+    pids = [p for p in (body.providers or list(PROVIDERS)) if p in PROVIDERS]
+    if not pids:
+        raise HTTPException(400, "No known providers selected.")
+    jid = uuid.uuid4().hex[:12]
+    job = {"id": jid, "status": "running", "started_at": time.time(), "finished_at": None,
+           "deep": body.deep, "providers": {
+               p: {"label": PROVIDERS[p]["label"], "default_model": PROVIDERS[p]["default_model"],
+                   "configured_models": list(PROVIDERS[p]["models"]), "state": "queued", "models": [], "catalog": None}
+               for p in pids}}
+    _SANITY_JOBS[jid] = job
+    for old in sorted(_SANITY_JOBS.values(), key=lambda j: j["started_at"])[:-_JOB_KEEP]:
+        _SANITY_JOBS.pop(old["id"], None)
+    job["_task"] = asyncio.create_task(_sanity_run(job, body))
+    return {"job_id": jid}
+
+
+@app.get("/api/providers/sanity/{jid}")
+async def providers_sanity_get(request: Request, jid: str):
+    _check_actor_limits(request)
+    job = _SANITY_JOBS.get(jid)
+    if not job:
+        raise HTTPException(404, "Unknown sanity job.")
+    return {k: v for k, v in job.items() if k != "_task"}
 
 
 # ----------------------------------------------------------------------------

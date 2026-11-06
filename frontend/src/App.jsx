@@ -12,9 +12,8 @@ import UsageDashboard from './components/UsageDashboard.jsx'
 import HostHealthTab from './components/HostHealthTab.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
-import Arena from './components/Arena.jsx'
+import BenchArena from './components/bench/BenchArena.jsx'
 import GatewayTab from './components/GatewayTab.jsx'
-import BenchTab from './components/BenchTab.jsx'
 import ScheduleTab from './components/ScheduleTab.jsx'
 import LockScreen from './components/LockScreen.jsx'
 import { composePersonaMessages } from './personas.js'
@@ -51,10 +50,9 @@ const SECURITY_QUICK_PROMPTS = [
 // from this one list so a new tab can't silently go missing from the UI.
 const TAB_ITEMS = [
   ['chat', 'Chat'],
-  ['arena', 'Arena'],
+  ['arena', 'Benchmark'],
   ['gateway', 'Gateway'],
   ['analyzer', 'Log Analyzer'],
-  ['bench', 'Benchmark'],
   ['schedules', 'Schedules'],
   ['usage', 'Usage'],
   ['host', 'Host'],
@@ -1272,7 +1270,7 @@ export default function App() {
             {messages.length === 0 && <div className="hidden md:block h-[14vh] shrink min-h-0" />}
           </>
         ) : tab === 'arena' ? (
-          <Arena
+          <BenchArena
             providers={providers}
             health={health}
             malayalamMode={malayalamMode}
@@ -1280,10 +1278,6 @@ export default function App() {
           />
         ) : tab === 'gateway' ? (
           <GatewayTab health={health} />
-        ) : tab === 'bench' ? (
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            <BenchTab health={health} providers={providers} />
-          </div>
         ) : tab === 'schedules' ? (
           <div className="flex-1 min-h-0 overflow-y-auto">
             <ScheduleTab

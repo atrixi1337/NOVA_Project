@@ -205,6 +205,17 @@ export const api = {
   benchRun: (body = {}) => jpost('/api/bench/run', body),
   benchHistory: (limit = 100) => jget(`/api/bench/runs?limit=${limit}`),
 
+  // Graded Benchmark Arena: many contenders, a judge model, async jobs (poll).
+  benchSuites: () => jget('/api/bench/suites'),
+  benchJobCreate: (body) => jpost('/api/bench/jobs', body),
+  benchJob: (id, full = false) => jget(`/api/bench/jobs/${id}${full ? '?full=1' : ''}`),
+  benchJobs: (limit = 30) => jget(`/api/bench/jobs?limit=${limit}`),
+  benchJobCancel: (id) => jpost(`/api/bench/jobs/${id}/cancel`, {}),
+  benchJobDelete: (id) => jdel(`/api/bench/jobs/${id}`),
+  // Provider sanity check (chat ping per provider, optional deep per-model pass).
+  sanityStart: (body = {}) => jpost('/api/providers/sanity', body),
+  sanityGet: (id) => jget(`/api/providers/sanity/${id}`),
+
   // F19 — scheduled prompts (interval-driven; results land in a conversation).
   schedules: () => jget('/api/schedules'),
   createSchedule: (body) => jpost('/api/schedules', body),
