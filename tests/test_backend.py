@@ -759,7 +759,7 @@ def test_spa_shell_routes_uncached(client):
 
 
 
-def test_reprice_costs_fixes_inflated_rows_idempotently():
+def test_reprice_costs_fixes_inflated_rows_idempotently(client):
     conn = backend._db()
     conn.execute("INSERT INTO usage_ledger (conversation_id,role,provider,model,prompt_tokens,completion_tokens,total_tokens,created_at,cost_usd) "
                  "VALUES ('c','assistant','cohere','command-a-plus-05-2026',1000,1000,2000,1,999.0)")
